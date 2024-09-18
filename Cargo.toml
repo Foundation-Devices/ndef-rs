@@ -1,0 +1,21 @@
+[package]
+categories = ["embedded", "no-std"]
+description = """This crate provides a `#[no_std]` library to implement a NFC Data Exchange Format structures."""
+edition = "2021"
+keywords = ["no-std", "nfc"]
+license = "MIT OR Apache-2.0"
+name = "ndef"
+version = "0.1.0"
+
+[dependencies]
+derive_more = { version = "1.0", default-features = false, features = ["from"] }
+
+[target.'cfg(not(features = "alloc"))'.dependencies]
+heapless = { version = "0.8", default-features = false }
+
+[features]
+alloc = []
+
+[[example]]
+name = "serialize_text"
+path = "examples/serialize_text.rs"
