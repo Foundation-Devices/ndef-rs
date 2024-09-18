@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/ndef.svg?maxAge=2592000)](https://crates.io/crates/ndef)
 
-`#[no_std]` Rust library to manipulate NDEF.
+`#![no_std]` Rust library to manipulate NDEF.
 
 ## Features
 
