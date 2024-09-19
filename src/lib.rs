@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 #[cfg(not(feature = "alloc"))]
 use heapless::Vec;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TypeNameFormat {
     Empty,
     NfcWellKnown,
@@ -26,31 +26,46 @@ pub enum TypeNameFormat {
     Reserved,
 }
 
-#[derive(Debug, Default, PartialEq)]
-pub struct Header(u8);
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Header(u8);
 
 impl Header {
-    pub fn message_begin(&self) -> bool {
-        self.0 & 0x80 == 0x80
+    // fn message_begin(&self) -> bool {
+    //     self.0 & 0x80 == 0x80
+    // }
+    fn set_message_begin(&mut self) {
+        self.0 |= 0x80;
     }
 
-    pub fn message_end(&self) -> bool {
-        self.0 & 0x40 == 0x40
+    // fn message_end(&self) -> bool {
+    //     self.0 & 0x40 == 0x40
+    // }
+    fn set_message_end(&mut self) {
+        self.0 |= 0x40;
+    }
+    fn clr_message_end(&mut self) {
+        self.0 &= !0x40;
     }
 
-    pub fn message_chunk(&self) -> bool {
-        self.0 & 0x20 == 0x20
-    }
+    // fn message_chunk(&self) -> bool {
+    //     self.0 & 0x20 == 0x20
+    // }
 
-    pub fn short_record(&self) -> bool {
+    fn short_record(&self) -> bool {
         self.0 & 0x10 == 0x10
     }
-
-    pub fn id_length(&self) -> bool {
-        self.0 & 0x08 == 0x08
+    fn set_short_record(&mut self) {
+        self.0 |= 0x10;
     }
 
-    pub fn type_name_format(&self) -> TypeNameFormat {
+    fn id_length(&self) -> bool {
+        self.0 & 0x08 == 0x08
+    }
+    fn set_id_length(&mut self) {
+        self.0 |= 0x08;
+    }
+
+    fn type_name_format(&self) -> TypeNameFormat {
         match self.0 & 0x07 {
             0 => TypeNameFormat::Empty,
             1 => TypeNameFormat::NfcWellKnown,
@@ -63,49 +78,183 @@ impl Header {
             _ => unreachable!(),
         }
     }
+    fn set_type_name_format(&mut self, tnf: TypeNameFormat) {
+        self.0 &= !0x70;
+        self.0 |= match tnf {
+            TypeNameFormat::Empty => 0x00,
+            TypeNameFormat::NfcWellKnown => 0x01,
+            TypeNameFormat::Media => 0x02,
+            TypeNameFormat::AbsoluteUri => 0x03,
+            TypeNameFormat::NfcExternal => 0x04,
+            TypeNameFormat::Unknown => 0x05,
+            TypeNameFormat::Unchanged => 0x06,
+            TypeNameFormat::Reserved => 0x07,
+        };
+    }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RecordType<'a> {
     Text { enc: &'a str, txt: &'a str },
 }
 
-#[derive(Debug, PartialEq)]
+impl<'a> RecordType<'a> {
+    fn len(&self) -> usize {
+        match self {
+            RecordType::Text { enc, txt } => 1 + enc.len() + txt.len(),
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    fn to_vec(&self) -> Vec<u8> {
+        match self {
+            RecordType::Text { enc, txt } => {
+                let mut data = Vec::new();
+                data.push(enc.len() as u8);
+                data.extend_from_slice(enc.as_bytes());
+                data.extend_from_slice(txt.as_bytes());
+                data
+            }
+        }
+    }
+    #[cfg(not(feature = "alloc"))]
+    fn to_vec(&self) -> Result<Vec<u8, 256>> {
+        match self {
+            RecordType::Text { enc, txt } => {
+                let mut data = Vec::new();
+                data.push(enc.len() as u8)
+                    .map_err(|_| Error::BufferTooSmall)?;
+                data.extend_from_slice(enc.as_bytes())
+                    .map_err(|_| Error::BufferTooSmall)?;
+                data.extend_from_slice(txt.as_bytes())
+                    .map_err(|_| Error::BufferTooSmall)?;
+                Ok(data)
+            }
+        }
+    }
+}
+
+impl<'a> From<&RecordType<'a>> for &'a str {
+    fn from(rtd: &RecordType<'a>) -> &'a str {
+        match rtd {
+            RecordType::Text { enc: _, txt: _ } => "T",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Payload<'a> {
     RTD(RecordType<'a>),
 }
 
-#[derive(Debug, PartialEq)]
+impl<'a> From<&Payload<'a>> for TypeNameFormat {
+    fn from(pl: &Payload<'a>) -> TypeNameFormat {
+        match pl {
+            Payload::RTD(_) => TypeNameFormat::NfcWellKnown,
+        }
+    }
+}
+
+impl<'a> Payload<'a> {
+    fn len(&self) -> usize {
+        match self {
+            Payload::RTD(rtd) => rtd.len(),
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    fn to_vec(&self) -> Vec<u8> {
+        match self {
+            Payload::RTD(rtd) => rtd.to_vec(),
+        }
+    }
+    #[cfg(not(feature = "alloc"))]
+    fn to_vec(&self) -> Result<Vec<u8, 256>> {
+        match self {
+            Payload::RTD(rtd) => rtd.to_vec(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Record<'a> {
-    pub header: Header,
-    pub id: Option<&'a [u8]>,
-    pub payload: Payload<'a>,
+    header: Header,
+    id: Option<&'a [u8]>,
+    payload: Payload<'a>,
+}
+
+impl<'a> Record<'a> {
+    pub fn new(id: Option<&'a [u8]>, payload: Payload<'a>) -> Self {
+        let mut header = Header::default();
+        header.set_type_name_format(TypeNameFormat::from(&payload));
+        if id.is_some() {
+            header.set_id_length();
+        }
+        if payload.len() < 256 {
+            header.set_short_record();
+        }
+        Self {
+            header,
+            id,
+            payload,
+        }
+    }
+
+    pub fn get_type(&self) -> &'a str {
+        match &self.payload {
+            Payload::RTD(rtd) => rtd.into(),
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    pub fn payload(&self) -> Vec<u8> {
+        self.payload.to_vec()
+    }
+    #[cfg(not(feature = "alloc"))]
+    pub fn payload(&self) -> Result<Vec<u8, 256>> {
+        self.payload.to_vec()
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Message<'a> {
     #[cfg(feature = "alloc")]
-    pub records: Vec<Record<'a>>,
+    records: Vec<Record<'a>>,
     #[cfg(not(feature = "alloc"))]
-    pub records: Vec<Record<'a>, 8>,
+    records: Vec<Record<'a>, 8>,
 }
 
 impl<'a> Message<'a> {
     #[cfg(feature = "alloc")]
+    pub fn append_record(&mut self, record: &mut Record<'a>) {
+        if self.records.is_empty() {
+            record.header.set_message_begin();
+        } else {
+            self.records.last_mut().unwrap().header.clr_message_end();
+        }
+        record.header.set_message_end();
+        self.records.push(record.clone());
+    }
+
+    #[cfg(not(feature = "alloc"))]
+    pub fn append_record(&mut self, record: &mut Record<'a>) -> Result<()> {
+        if self.records.is_empty() {
+            record.header.set_message_begin();
+        } else {
+            self.records.last_mut().unwrap().header.clr_message_end();
+        }
+        record.header.set_message_end();
+        self.records
+            .push(record.clone())
+            .map_err(|_| Error::BufferTooSmall)
+    }
+
+    #[cfg(feature = "alloc")]
     pub fn to_vec(&self) -> Result<Vec<u8>> {
         let mut buf = Vec::new();
         for record in &self.records {
-            let (type_, payload_data) = match &record.payload {
-                Payload::RTD(rtd) => match rtd {
-                    RecordType::Text { enc, txt } => {
-                        let mut data: Vec<u8> = Vec::new();
-                        data.push(enc.len() as u8);
-                        data.extend_from_slice(enc.as_bytes());
-                        data.extend_from_slice(txt.as_bytes());
-                        ("T", data)
-                    }
-                },
-            };
+            let type_ = record.get_type();
+            let payload_data = record.payload();
             // Header
             buf.push(record.header.0);
             // Type Length
@@ -132,20 +281,8 @@ impl<'a> Message<'a> {
     pub fn to_vec(&self) -> Result<Vec<u8, 256>> {
         let mut buf = Vec::new();
         for record in &self.records {
-            let (type_, payload_data) = match &record.payload {
-                Payload::RTD(rtd) => match rtd {
-                    RecordType::Text { enc, txt } => {
-                        let mut data: Vec<u8, 128> = Vec::new();
-                        data.push(enc.len() as u8)
-                            .map_err(|_| Error::BufferTooSmall)?;
-                        data.extend_from_slice(enc.as_bytes())
-                            .map_err(|_| Error::BufferTooSmall)?;
-                        data.extend_from_slice(txt.as_bytes())
-                            .map_err(|_| Error::BufferTooSmall)?;
-                        ("T", data)
-                    }
-                },
-            };
+            let type_ = record.get_type();
+            let payload_data = record.payload()?;
             // Header
             buf.push(record.header.0)
                 .map_err(|_| Error::BufferTooSmall)?;
@@ -274,18 +411,17 @@ mod tests {
         //                              T       f    r    T   h    t
         let raw = [209, 1, 6, 84, 2, 102, 114, 84, 104, 116];
         let mut msg = Message::default();
-        let rec1 = Record {
-            header: Header(209),
-            id: None,
-            payload: Payload::RTD(RecordType::Text {
+        let mut rec1 = Record::new(
+            None,
+            Payload::RTD(RecordType::Text {
                 enc: "fr",
                 txt: "Tht",
             }),
-        };
+        );
         #[cfg(feature = "alloc")]
-        msg.records.push(rec1);
+        msg.append_record(&mut rec1);
         #[cfg(not(feature = "alloc"))]
-        msg.records.push(rec1).unwrap();
+        msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
