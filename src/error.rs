@@ -14,6 +14,10 @@ pub enum Error<'a> {
     /// The provided data is not valid UTF-8
     #[from]
     UTF8(core::str::Utf8Error),
+    /// The provided data is odd length
+    UTF16OddLength(usize),
+    /// The provided data is not valid UTF-16
+    UTF16Invalid,
 }
 
 pub type Result<'a, T> = core::result::Result<T, Error<'a>>;

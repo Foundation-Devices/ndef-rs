@@ -110,6 +110,7 @@ impl<'a> RecordType<'a> {
         match self {
             RecordType::Text { enc, txt } => {
                 let mut data = Vec::new();
+                // force utf-8 encoding here
                 data.push(enc.len() as u8);
                 data.extend_from_slice(enc.as_bytes());
                 data.extend_from_slice(txt.as_bytes());
@@ -122,6 +123,7 @@ impl<'a> RecordType<'a> {
         match self {
             RecordType::Text { enc, txt } => {
                 let mut data = Vec::new();
+                // force utf-8 encoding here
                 data.push(enc.len() as u8)
                     .map_err(|_| Error::BufferTooSmall)?;
                 data.extend_from_slice(enc.as_bytes())
