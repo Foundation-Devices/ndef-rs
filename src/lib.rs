@@ -373,12 +373,39 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                         if payload_data.is_empty() {
                             return Err(Error::SliceTooShort);
                         }
-                        let enc_len = payload_data[0] as usize;
+                        let enc_len = (payload_data[0] & 0x1f) as usize;
+                        let is_utf16 = (payload_data[0] & 0x80) != 0;
                         if payload_data.len() < enc_len + 1 {
                             return Err(Error::SliceTooShort);
                         }
                         let enc = core::str::from_utf8(&payload_data[1..enc_len + 1])?;
-                        let txt = core::str::from_utf8(&payload_data[enc_len + 1..])?;
+                        let txt = if is_utf16 {
+                            unimplemented!("UTF-16 decoding is not supported yet");
+                            // let utf16_bytes = &payload_data[enc_len + 1..];
+                            // Ensure the byte slice has an even length (UTF-16 is 2 bytes per unit)
+                            // if utf16_bytes.len() % 2 != 0 {
+                            //     return Err(Error::UTF16OddLength(utf16_bytes.len()));
+                            // }
+                            // Convert the byte slice into u16 units
+                            // let utf16_units: &[u16] = unsafe {
+                            //     core::slice::from_raw_parts(
+                            //         utf16_bytes.as_ptr() as *const u16,
+                            //         utf16_bytes.len() / 2,
+                            //     )
+                            // };
+                            // Decode UTF-16 into characters, handle potential errors
+                            // let decoded_chars: Vec<_> =
+                            //     core::char::decode_utf16(utf16_units.iter().cloned())
+                            //         .collect()
+                            //         .map_err(|_| Error::UTF16Invalid)?;
+                            // Convert the vector of chars to a string slice
+                            // core::str::from_utf8(
+                            //     &*decoded_chars.iter().collect::<String>().as_bytes(),
+                            // )?
+                            // core::str::from_utf16(&payload_data[enc_len + 1..])?
+                        } else {
+                            core::str::from_utf8(&payload_data[enc_len + 1..])?
+                        };
                         RecordType::Text { enc, txt }
                     }
                     t => return Err(Error::UnsupportedRecordType(t)),
