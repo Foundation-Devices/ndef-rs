@@ -11,6 +11,8 @@
     - allow more than 256 bytes of payload size
     - allow to decode UTF-16 RTD Text record (always encoded in UTF-8)
     - allow to encode RTD external record
+- cbor: add minicbor dependency
+    - provide a custom cbor RTD external record
 
 ## Example Usage
 ### Cargo.toml

@@ -104,6 +104,8 @@ pub enum RecordType<'a> {
         type_: &'a str,
         data: &'a [u8],
     },
+    #[cfg(feature = "cbor")]
+    Cbor(&'a [u8]),
 }
 
 impl<'a> RecordType<'a> {
@@ -111,6 +113,8 @@ impl<'a> RecordType<'a> {
         match self {
             RecordType::Text { enc, txt } => 1 + enc.len() + txt.len(),
             RecordType::External { data, .. } => data.len(),
+            #[cfg(feature = "cbor")]
+            RecordType::Cbor(data) => data.len(),
         }
     }
 
@@ -126,6 +130,8 @@ impl<'a> RecordType<'a> {
                 data
             }
             RecordType::External { data, .. } => data.to_vec(),
+            #[cfg(feature = "cbor")]
+            RecordType::Cbor(data) => data.to_vec(),
         }
     }
     #[cfg(not(feature = "alloc"))]
@@ -145,6 +151,8 @@ impl<'a> RecordType<'a> {
             RecordType::External { data, .. } => {
                 Vec::from_slice(data).map_err(|_| Error::BufferTooSmall)
             }
+            #[cfg(feature = "cbor")]
+            RecordType::Cbor(data) => Vec::from_slice(data).map_err(|_| Error::BufferTooSmall),
         }
     }
 }
@@ -158,6 +166,8 @@ impl<'a> From<&Payload<'a>> for TypeNameFormat {
     fn from(pl: &Payload<'a>) -> TypeNameFormat {
         match pl {
             Payload::RTD(RecordType::External { .. }) => TypeNameFormat::NfcExternal,
+            #[cfg(feature = "cbor")]
+            Payload::RTD(RecordType::Cbor(_)) => TypeNameFormat::NfcExternal,
             Payload::RTD(_) => TypeNameFormat::NfcWellKnown,
         }
     }
@@ -216,6 +226,8 @@ impl<'a> Record<'a> {
             Payload::RTD(rtd) => match rtd {
                 RecordType::Text { .. } => "T".to_string(),
                 RecordType::External { domain, type_, .. } => format!("{domain}:{type_}"),
+                #[cfg(feature = "cbor")]
+                RecordType::Cbor(_) => "cbor.io:cbor".to_string(),
             },
         }
     }
@@ -229,6 +241,8 @@ impl<'a> Record<'a> {
                     type_: _,
                     ..
                 } => unimplemented!("can't concat without alloc"),
+                #[cfg(feature = "cbor")]
+                RecordType::Cbor(_) => "cbor.io:cbor",
             },
         }
     }
@@ -433,19 +447,23 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                     }
                     t => return Err(Error::UnsupportedRecordType(t)),
                 }),
-                TypeNameFormat::NfcExternal => {
-                    if let Some(index) = type_.find(':') {
-                        let domain = &type_[..index];
-                        let type_ = &type_[index + 1..];
-                        Payload::RTD(RecordType::External {
-                            domain,
-                            type_,
-                            data: payload_data,
-                        })
-                    } else {
-                        return Err(Error::InvalidExternalType(type_));
+                TypeNameFormat::NfcExternal => match type_ {
+                    #[cfg(feature = "cbor")]
+                    "cbor.io:cbor" => Payload::RTD(RecordType::Cbor(payload_data)),
+                    _ => {
+                        if let Some(index) = type_.find(':') {
+                            let domain = &type_[..index];
+                            let type_ = &type_[index + 1..];
+                            Payload::RTD(RecordType::External {
+                                domain,
+                                type_,
+                                data: payload_data,
+                            })
+                        } else {
+                            return Err(Error::InvalidExternalType(type_));
+                        }
                     }
-                }
+                },
                 tnf => return Err(Error::UnsupportedTypeNameFormat(tnf)),
             };
             #[cfg(feature = "alloc")]
@@ -531,6 +549,22 @@ mod tests {
         msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
         #[cfg(feature = "alloc")]
+        assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
+    }
+    #[test]
+    #[cfg(feature = "cbor")]
+    fn test_cbor() {
+        let raw = [
+            0xD4, 0x0c, 0x01, 0x63, 0x62, 0x6f, 0x72, 0x2e, 0x69, 0x6f, 0x3a, 0x63, 0x62, 0x6f,
+            0x72, 0x61,
+        ];
+        let mut msg = Message::default();
+        let mut rec1 = Record::new(None, Payload::RTD(RecordType::Cbor(&[0x61])));
+        #[cfg(feature = "alloc")]
+        msg.append_record(&mut rec1);
+        #[cfg(not(feature = "alloc"))]
+        msg.append_record(&mut rec1).unwrap();
+        assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
 }
