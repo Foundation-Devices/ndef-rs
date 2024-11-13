@@ -10,7 +10,7 @@ pub use error::{Error, Result};
 #[cfg(feature = "alloc")]
 extern crate alloc;
 #[cfg(feature = "alloc")]
-use alloc::{string::String, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 #[cfg(not(feature = "alloc"))]
 use heapless::Vec;
 
@@ -99,12 +99,18 @@ pub enum RecordType<'a> {
     Text { enc: &'a str, txt: &'a str },
     #[cfg(feature = "alloc")]
     Text { enc: &'a str, txt: String },
+    External {
+        domain: &'a str,
+        type_: &'a str,
+        data: &'a [u8],
+    },
 }
 
 impl<'a> RecordType<'a> {
     fn len(&self) -> usize {
         match self {
             RecordType::Text { enc, txt } => 1 + enc.len() + txt.len(),
+            RecordType::External { data, .. } => data.len(),
         }
     }
 
@@ -119,6 +125,7 @@ impl<'a> RecordType<'a> {
                 data.extend_from_slice(txt.as_bytes());
                 data
             }
+            RecordType::External { data, .. } => data.to_vec(),
         }
     }
     #[cfg(not(feature = "alloc"))]
@@ -135,14 +142,9 @@ impl<'a> RecordType<'a> {
                     .map_err(|_| Error::BufferTooSmall)?;
                 Ok(data)
             }
-        }
-    }
-}
-
-impl<'a> From<&RecordType<'a>> for &'a str {
-    fn from(rtd: &RecordType<'a>) -> &'a str {
-        match rtd {
-            RecordType::Text { enc: _, txt: _ } => "T",
+            RecordType::External { data, .. } => {
+                Vec::from_slice(data).map_err(|_| Error::BufferTooSmall)
+            }
         }
     }
 }
@@ -155,6 +157,7 @@ pub enum Payload<'a> {
 impl<'a> From<&Payload<'a>> for TypeNameFormat {
     fn from(pl: &Payload<'a>) -> TypeNameFormat {
         match pl {
+            Payload::RTD(RecordType::External { .. }) => TypeNameFormat::NfcExternal,
             Payload::RTD(_) => TypeNameFormat::NfcWellKnown,
         }
     }
@@ -205,9 +208,28 @@ impl<'a> Record<'a> {
         }
     }
 
+    #[cfg(feature = "alloc")]
+    pub fn get_type(&self) -> String {
+        use alloc::string::ToString;
+
+        match &self.payload {
+            Payload::RTD(rtd) => match rtd {
+                RecordType::Text { .. } => "T".to_string(),
+                RecordType::External { domain, type_, .. } => format!("{domain}:{type_}"),
+            },
+        }
+    }
+    #[cfg(not(feature = "alloc"))]
     pub fn get_type(&self) -> &'a str {
         match &self.payload {
-            Payload::RTD(rtd) => rtd.into(),
+            Payload::RTD(rtd) => match rtd {
+                RecordType::Text { .. } => "T",
+                RecordType::External {
+                    domain: _,
+                    type_: _,
+                    ..
+                } => unimplemented!("can't concat without alloc"),
+            },
         }
     }
 
@@ -411,6 +433,19 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                     }
                     t => return Err(Error::UnsupportedRecordType(t)),
                 }),
+                TypeNameFormat::NfcExternal => {
+                    if let Some(index) = type_.find(':') {
+                        let domain = &type_[..index];
+                        let type_ = &type_[index + 1..];
+                        Payload::RTD(RecordType::External {
+                            domain,
+                            type_,
+                            data: payload_data,
+                        })
+                    } else {
+                        return Err(Error::InvalidExternalType(type_));
+                    }
+                }
                 tnf => return Err(Error::UnsupportedTypeNameFormat(tnf)),
             };
             #[cfg(feature = "alloc")]
@@ -440,7 +475,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_utf8_text() {
+    fn test_rtd_text_utf8() {
         let raw = [
             0xD1, 0x01, 0x12, 0x54, 0x02, 0x66, 0x72, 0x55, 0x54, 0x46, 0x2D, 0x38, 0x20, 0x74,
             0x65, 0x78, 0x74, 0x20, 0xf0, 0x9f, 0xa6, 0x80,
@@ -459,7 +494,7 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "alloc")]
-    fn test_parse_utf16_text() {
+    fn test_rtd_text_utf16() {
         let raw = [
             0xD1, 0x01, 0x1F, 0x54, 0x82, 0x66, 0x72, 0x00, 0x55, 0x00, 0x54, 0x00, 0x46, 0x00,
             0x2D, 0x00, 0x31, 0x00, 0x36, 0x00, 0x20, 0x00, 0x74, 0x00, 0x65, 0x00, 0x78, 0x00,
@@ -473,10 +508,29 @@ mod tests {
                 txt: "UTF-16 text 🦀".to_string(),
             }),
         );
+        msg.append_record(&mut rec1);
+        assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+    }
+    #[test]
+    fn test_rtd_external() {
+        let raw = [
+            0xD4, 0x08, 0x01, 0x65, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x3a, 0x74, 0x61,
+        ];
+        let mut msg = Message::default();
+        let mut rec1 = Record::new(
+            None,
+            Payload::RTD(RecordType::External {
+                domain: "ex.com",
+                type_: "t",
+                data: &[0x61],
+            }),
+        );
         #[cfg(feature = "alloc")]
         msg.append_record(&mut rec1);
         #[cfg(not(feature = "alloc"))]
         msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+        #[cfg(feature = "alloc")]
+        assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
 }

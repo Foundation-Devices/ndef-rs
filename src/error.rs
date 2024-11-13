@@ -9,6 +9,8 @@ pub enum Error<'a> {
     SliceTooShort,
     /// The type name format is not supported yet (to be implemented)
     UnsupportedTypeNameFormat(crate::TypeNameFormat),
+    /// The provided external type does not contain a ':'
+    InvalidExternalType(&'a str),
     /// The record type is not supported yet (to be implemented)
     UnsupportedRecordType(&'a str),
     /// The provided data is not valid UTF-8

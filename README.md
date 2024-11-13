@@ -6,7 +6,11 @@
 
 ## Features
 
-- alloc: enable a global allocator (use `alloc::vec::Vec` instead of `heapless::Vec` and `alloc::string::String` to decode UTF-16 data)
+- alloc: enable a global allocator
+    - allow more than 8 records per message
+    - allow more than 256 bytes of payload size
+    - allow to decode UTF-16 RTD Text record (always encoded in UTF-8)
+    - allow to encode RTD external record
 
 ## Example Usage
 ### Cargo.toml
