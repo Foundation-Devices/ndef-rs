@@ -6,7 +6,7 @@
 
 ## Features
 
-- alloc: enable a global allocator (use `alloc::vec::Vec` instead of `heapless::Vec`)
+- alloc: enable a global allocator (use `alloc::vec::Vec` instead of `heapless::Vec` and `alloc::string::String` to decode UTF-16 data)
 
 ## Example Usage
 ### Cargo.toml
@@ -25,7 +25,7 @@ fn main() {
         None,
         Payload::RTD(RecordType::Text {
             enc: "en",
-            txt: "NDEF Text from Rust!",
+            txt: "NDEF Text from Rust🦀!",
         }),
     );
     msg.append_record(&mut rec1).unwrap();

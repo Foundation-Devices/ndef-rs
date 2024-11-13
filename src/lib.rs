@@ -10,7 +10,7 @@ pub use error::{Error, Result};
 #[cfg(feature = "alloc")]
 extern crate alloc;
 #[cfg(feature = "alloc")]
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 #[cfg(not(feature = "alloc"))]
 use heapless::Vec;
 
@@ -95,7 +95,10 @@ impl Header {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RecordType<'a> {
+    #[cfg(not(feature = "alloc"))]
     Text { enc: &'a str, txt: &'a str },
+    #[cfg(feature = "alloc")]
+    Text { enc: &'a str, txt: String },
 }
 
 impl<'a> RecordType<'a> {
@@ -218,7 +221,7 @@ impl<'a> Record<'a> {
     }
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Message<'a> {
     #[cfg(feature = "alloc")]
     records: Vec<Record<'a>>,
@@ -380,31 +383,29 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                         }
                         let enc = core::str::from_utf8(&payload_data[1..enc_len + 1])?;
                         let txt = if is_utf16 {
+                            #[cfg(not(feature = "alloc"))]
                             unimplemented!("UTF-16 decoding is not supported yet");
-                            // let utf16_bytes = &payload_data[enc_len + 1..];
-                            // Ensure the byte slice has an even length (UTF-16 is 2 bytes per unit)
-                            // if utf16_bytes.len() % 2 != 0 {
-                            //     return Err(Error::UTF16OddLength(utf16_bytes.len()));
-                            // }
-                            // Convert the byte slice into u16 units
-                            // let utf16_units: &[u16] = unsafe {
-                            //     core::slice::from_raw_parts(
-                            //         utf16_bytes.as_ptr() as *const u16,
-                            //         utf16_bytes.len() / 2,
-                            //     )
-                            // };
-                            // Decode UTF-16 into characters, handle potential errors
-                            // let decoded_chars: Vec<_> =
-                            //     core::char::decode_utf16(utf16_units.iter().cloned())
-                            //         .collect()
-                            //         .map_err(|_| Error::UTF16Invalid)?;
-                            // Convert the vector of chars to a string slice
-                            // core::str::from_utf8(
-                            //     &*decoded_chars.iter().collect::<String>().as_bytes(),
-                            // )?
-                            // core::str::from_utf16(&payload_data[enc_len + 1..])?
+                            #[cfg(feature = "alloc")]
+                            {
+                                let utf16_bytes = &payload_data[enc_len + 1..];
+                                // Ensure the byte slice has an even length (UTF-16 is 2 bytes per unit)
+                                if utf16_bytes.len() % 2 != 0 {
+                                    return Err(Error::UTF16OddLength(utf16_bytes.len()));
+                                }
+                                // Convert the byte slice into u16 units
+                                let utf16_units: Vec<u16> = utf16_bytes
+                                    .chunks(2)
+                                    .map(|chunk| u16::from_be_bytes(chunk.try_into().unwrap()))
+                                    .collect();
+                                String::from_utf16(&utf16_units).map_err(|_| Error::UTF16Decode)?
+                            }
                         } else {
-                            core::str::from_utf8(&payload_data[enc_len + 1..])?
+                            #[cfg(not(feature = "alloc"))]
+                            {
+                                core::str::from_utf8(&payload_data[enc_len + 1..])?
+                            }
+                            #[cfg(feature = "alloc")]
+                            String::from_utf8(payload_data[enc_len + 1..].to_vec())?
                         };
                         RecordType::Text { enc, txt }
                     }
@@ -433,18 +434,43 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "alloc")]
+    use alloc::string::ToString;
+
     use super::*;
 
     #[test]
-    fn test_parse() {
-        //                              T       f    r    T   h    t
-        let raw = [209, 1, 6, 84, 2, 102, 114, 84, 104, 116];
+    fn test_parse_utf8_text() {
+        let raw = [
+            0xD1, 0x01, 0x12, 0x54, 0x02, 0x66, 0x72, 0x55, 0x54, 0x46, 0x2D, 0x38, 0x20, 0x74,
+            0x65, 0x78, 0x74, 0x20, 0xf0, 0x9f, 0xa6, 0x80,
+        ];
+        let mut msg = Message::default();
+        let txt = "UTF-8 text 🦀";
+        #[cfg(feature = "alloc")]
+        let txt = txt.to_string();
+        let mut rec1 = Record::new(None, Payload::RTD(RecordType::Text { enc: "fr", txt }));
+        #[cfg(feature = "alloc")]
+        msg.append_record(&mut rec1);
+        #[cfg(not(feature = "alloc"))]
+        msg.append_record(&mut rec1).unwrap();
+        assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+        assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
+    }
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn test_parse_utf16_text() {
+        let raw = [
+            0xD1, 0x01, 0x1F, 0x54, 0x82, 0x66, 0x72, 0x00, 0x55, 0x00, 0x54, 0x00, 0x46, 0x00,
+            0x2D, 0x00, 0x31, 0x00, 0x36, 0x00, 0x20, 0x00, 0x74, 0x00, 0x65, 0x00, 0x78, 0x00,
+            0x74, 0x00, 0x20, 0xd8, 0x3e, 0xdd, 0x80,
+        ];
         let mut msg = Message::default();
         let mut rec1 = Record::new(
             None,
             Payload::RTD(RecordType::Text {
                 enc: "fr",
-                txt: "Tht",
+                txt: "UTF-16 text 🦀".to_string(),
             }),
         );
         #[cfg(feature = "alloc")]
@@ -452,6 +478,5 @@ mod tests {
         #[cfg(not(feature = "alloc"))]
         msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
-        assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
 }
