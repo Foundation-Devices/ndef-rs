@@ -13,6 +13,7 @@
     - allow to encode RTD external record
 - cbor: add minicbor dependency
     - provide a custom cbor RTD external record
+    - provide a convenient record payload from cbor encodable type (need `alloc` too)
 
 ## Example Usage
 ### Cargo.toml

@@ -12,5 +12,8 @@ fn main() {
     msg.append_record(&mut rec1).unwrap();
 
     // Print message raw data
+    #[cfg(feature = "alloc")]
+    println!("message raw data: {:?}", msg.to_vec().as_slice());
+    #[cfg(not(feature = "alloc"))]
     println!("message raw data: {:?}", msg.to_vec().unwrap().as_slice());
 }

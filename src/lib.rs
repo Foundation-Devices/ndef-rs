@@ -104,8 +104,10 @@ pub enum RecordType<'a> {
         type_: &'a str,
         data: &'a [u8],
     },
-    #[cfg(feature = "cbor")]
+    #[cfg(all(feature = "cbor", not(feature = "alloc")))]
     Cbor(&'a [u8]),
+    #[cfg(all(feature = "cbor", feature = "alloc"))]
+    Cbor(Vec<u8>),
 }
 
 impl<'a> RecordType<'a> {
@@ -131,7 +133,7 @@ impl<'a> RecordType<'a> {
             }
             RecordType::External { data, .. } => data.to_vec(),
             #[cfg(feature = "cbor")]
-            RecordType::Cbor(data) => data.to_vec(),
+            RecordType::Cbor(data) => data.clone(),
         }
     }
     #[cfg(not(feature = "alloc"))]
@@ -191,6 +193,13 @@ impl<'a> Payload<'a> {
         match self {
             Payload::RTD(rtd) => rtd.to_vec(),
         }
+    }
+    #[cfg(all(feature = "alloc", feature = "cbor"))]
+    pub fn from_cbor_encodable<T>(x: &T) -> Self
+    where
+        T: minicbor::Encode<()>,
+    {
+        Payload::RTD(RecordType::Cbor(minicbor::to_vec(x).unwrap()))
     }
 }
 
@@ -291,7 +300,7 @@ impl<'a> Message<'a> {
     }
 
     #[cfg(feature = "alloc")]
-    pub fn to_vec(&self) -> Result<Vec<u8>> {
+    pub fn to_vec(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         for record in &self.records {
             let type_ = record.get_type();
@@ -315,7 +324,7 @@ impl<'a> Message<'a> {
             // Payload
             buf.extend_from_slice(payload_data.as_slice());
         }
-        Ok(buf)
+        buf
     }
 
     #[cfg(not(feature = "alloc"))]
@@ -448,8 +457,10 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                     t => return Err(Error::UnsupportedRecordType(t)),
                 }),
                 TypeNameFormat::NfcExternal => match type_ {
-                    #[cfg(feature = "cbor")]
+                    #[cfg(all(feature = "cbor", not(feature = "alloc")))]
                     "cbor.io:cbor" => Payload::RTD(RecordType::Cbor(payload_data)),
+                    #[cfg(all(feature = "cbor", feature = "alloc"))]
+                    "cbor.io:cbor" => Payload::RTD(RecordType::Cbor(payload_data.to_vec())),
                     _ => {
                         if let Some(index) = type_.find(':') {
                             let domain = &type_[..index];
@@ -508,6 +519,9 @@ mod tests {
         #[cfg(not(feature = "alloc"))]
         msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+        #[cfg(feature = "alloc")]
+        assert_eq!(&raw, msg.to_vec().as_slice());
+        #[cfg(not(feature = "alloc"))]
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
     #[test]
@@ -549,7 +563,7 @@ mod tests {
         msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
         #[cfg(feature = "alloc")]
-        assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
+        assert_eq!(&raw, msg.to_vec().as_slice());
     }
     #[test]
     #[cfg(feature = "cbor")]
@@ -559,12 +573,18 @@ mod tests {
             0x72, 0x61,
         ];
         let mut msg = Message::default();
+        #[cfg(feature = "alloc")]
+        let mut rec1 = Record::new(None, Payload::RTD(RecordType::Cbor(alloc::vec![0x61])));
+        #[cfg(not(feature = "alloc"))]
         let mut rec1 = Record::new(None, Payload::RTD(RecordType::Cbor(&[0x61])));
         #[cfg(feature = "alloc")]
         msg.append_record(&mut rec1);
         #[cfg(not(feature = "alloc"))]
         msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+        #[cfg(feature = "alloc")]
+        assert_eq!(&raw, msg.to_vec().as_slice());
+        #[cfg(not(feature = "alloc"))]
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
 }
