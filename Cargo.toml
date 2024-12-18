@@ -5,6 +5,7 @@ edition = "2021"
 keywords = ["no-std", "nfc"]
 license = "MIT OR Apache-2.0"
 name = "ndef"
+repository = "https://github.com/Foundation-Devices/ndef-rs"
 version = "0.2.0"
 
 [dependencies]
