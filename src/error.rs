@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2024 Foundation Devices, Inc. <hello@foundation.xyz>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use derive_more::From;
 
 #[derive(Debug, From, PartialEq)]
@@ -30,9 +33,10 @@ pub enum Error<'a> {
 
 pub type Result<'a, T> = core::result::Result<T, Error<'a>>;
 
-// can be enabled when MSRV >= 1.81
-// impl<'a> core::error::Error for Error<'a> {}
+#[rustversion::since(1.81)]
+impl<'a> core::error::Error for Error<'a> {}
 
+#[rustversion::since(1.81)]
 impl<'a> core::fmt::Display for Error<'a> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{self:?}")

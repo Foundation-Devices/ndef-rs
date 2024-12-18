@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: © 2024 Foundation Devices, Inc. <hello@foundation.xyz>
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
 # ndef
 
 [![Crates.io](https://img.shields.io/crates/v/ndef.svg?maxAge=2592000)](https://crates.io/crates/ndef)
