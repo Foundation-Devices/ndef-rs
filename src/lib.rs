@@ -207,7 +207,7 @@ impl<'a> Payload<'a> {
 pub struct Record<'a> {
     header: Header,
     id: Option<&'a [u8]>,
-    payload: Payload<'a>,
+    pub payload: Payload<'a>,
 }
 
 impl<'a> Record<'a> {
@@ -225,6 +225,10 @@ impl<'a> Record<'a> {
             id,
             payload,
         }
+    }
+
+    pub fn is_type_cbor(&self) -> bool {
+        matches!(&self.payload, Payload::RTD(RecordType::Cbor(_)))
     }
 
     #[cfg(feature = "alloc")]
@@ -269,9 +273,9 @@ impl<'a> Record<'a> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Message<'a> {
     #[cfg(feature = "alloc")]
-    records: Vec<Record<'a>>,
+    pub records: Vec<Record<'a>>,
     #[cfg(not(feature = "alloc"))]
-    records: Vec<Record<'a>, 8>,
+    pub records: Vec<Record<'a>, 8>,
 }
 
 impl<'a> Message<'a> {
