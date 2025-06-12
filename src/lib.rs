@@ -227,6 +227,7 @@ impl<'a> Record<'a> {
         }
     }
 
+    #[cfg(feature = "cbor")]
     pub fn is_type_cbor(&self) -> bool {
         matches!(&self.payload, Payload::RTD(RecordType::Cbor(_)))
     }
