@@ -21,17 +21,35 @@ jobs:
     steps:
       - name: Set up Rust
         uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.75.0
       - uses: awalsh128/cache-apt-pkgs-action@latest
         with:
           packages: libudev-dev
           version: 1.0
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --verbose --all-features
       - name: Test
-        run: cargo test --verbose
+        run: cargo test --verbose --all-features
+      - name: Test no-default-features
+        run: cargo test --verbose --no-default-features
       - name: Format
         run: cargo fmt --check
       - name: Clippy
-        run: cargo clippy --verbose -- -D warnings
+        run: cargo clippy --verbose --all-features -- -D warnings
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
       - name: Audit
         run: cargo audit
