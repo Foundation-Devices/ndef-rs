@@ -24,7 +24,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 ### Cargo.toml
 
     [dependencies]
-    ndef = "0.1.0"
+    ndef = "0.5.0"
     
 
 ### main.rs  
