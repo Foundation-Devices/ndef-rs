@@ -16,7 +16,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     - allow more than 256 bytes of payload size
     - allow to decode UTF-16 RTD Text record (always encoded in UTF-8)
     - allow to encode RTD external record
-- cbor: add minicbor dependency
+- cbor: add dcbor dependency
     - provide a custom cbor RTD external record
     - provide a convenient record payload from cbor encodable type (need `alloc` too)
 

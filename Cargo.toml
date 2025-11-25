@@ -14,15 +14,15 @@ version = "0.4.0"
 
 [dependencies]
 derive_more = { version = "1.0", default-features = false, features = ["from"] }
-minicbor = { version = "0.24", optional = true }
+dcbor = { version = "0.23", optional = true, default-features = false, features = ["no_std"] }
 rustversion = "1.0"
 
 [target.'cfg(not(features = "alloc"))'.dependencies]
 heapless = { version = "0.8", default-features = false }
 
 [features]
-alloc = ["minicbor?/alloc"]
-cbor = ["dep:minicbor"]
+alloc = []
+cbor = ["dep:dcbor"]
 
 [[example]]
 name = "serialize_text"

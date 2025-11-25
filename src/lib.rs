@@ -197,9 +197,9 @@ impl<'a> Payload<'a> {
     #[cfg(all(feature = "alloc", feature = "cbor"))]
     pub fn from_cbor_encodable<T>(x: &T) -> Self
     where
-        T: minicbor::Encode<()>,
+        T: dcbor::CBOREncodable,
     {
-        Payload::RTD(RecordType::Cbor(minicbor::to_vec(x).unwrap()))
+        Payload::RTD(RecordType::Cbor(x.to_cbor_data()))
     }
 }
 
