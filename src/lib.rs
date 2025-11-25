@@ -137,7 +137,7 @@ impl<'a> RecordType<'a> {
         }
     }
     #[cfg(not(feature = "alloc"))]
-    fn to_vec(&self) -> Result<Vec<u8, 256>> {
+    fn to_vec(&self) -> Result<'_, Vec<u8, 256>> {
         match self {
             RecordType::Text { enc, txt } => {
                 let mut data = Vec::new();
@@ -189,7 +189,7 @@ impl<'a> Payload<'a> {
         }
     }
     #[cfg(not(feature = "alloc"))]
-    fn to_vec(&self) -> Result<Vec<u8, 256>> {
+    fn to_vec(&self) -> Result<'_, Vec<u8, 256>> {
         match self {
             Payload::RTD(rtd) => rtd.to_vec(),
         }
@@ -266,7 +266,7 @@ impl<'a> Record<'a> {
         self.payload.to_vec()
     }
     #[cfg(not(feature = "alloc"))]
-    pub fn payload(&self) -> Result<Vec<u8, 256>> {
+    pub fn payload(&self) -> Result<'_, Vec<u8, 256>> {
         self.payload.to_vec()
     }
 }
@@ -292,7 +292,7 @@ impl<'a> Message<'a> {
     }
 
     #[cfg(not(feature = "alloc"))]
-    pub fn append_record(&mut self, record: &mut Record<'a>) -> Result<()> {
+    pub fn append_record(&mut self, record: &mut Record<'a>) -> Result<'_, ()> {
         if self.records.is_empty() {
             record.header.set_message_begin();
         } else {
@@ -333,7 +333,7 @@ impl<'a> Message<'a> {
     }
 
     #[cfg(not(feature = "alloc"))]
-    pub fn to_vec(&self) -> Result<Vec<u8, 256>> {
+    pub fn to_vec(&self) -> Result<'_, Vec<u8, 256>> {
         let mut buf = Vec::new();
         for record in &self.records {
             let type_ = record.get_type();
@@ -371,7 +371,7 @@ impl<'a> Message<'a> {
 impl<'a> TryFrom<&'a [u8]> for Message<'a> {
     type Error = Error<'a>;
 
-    fn try_from(slice: &'a [u8]) -> Result<Self> {
+    fn try_from(slice: &'a [u8]) -> Result<'a, Self> {
         if slice.is_empty() {
             return Err(Error::SliceTooShort);
         }
