@@ -26,6 +26,13 @@ const MAX_FIELD_LEN: usize = u8::MAX as usize;
 /// the normal form, whose payload length is four big-endian octets.
 const MAX_SHORT_PAYLOAD_LEN: usize = u8::MAX as usize;
 
+/// Longest language code of a Text record. Its status byte spends the low six
+/// bits on the length, bit 7 on the encoding and keeps bit 6 reserved.
+const MAX_LANGUAGE_LEN: usize = 0x3f;
+const TEXT_LANGUAGE_LEN_MASK: u8 = 0x3f;
+const TEXT_RESERVED_MASK: u8 = 0x40;
+const TEXT_UTF16_MASK: u8 = 0x80;
+
 /// Buffer holding serialized bytes. Without `alloc` the capacity is fixed and
 /// the serializer reports [`Error::BufferTooSmall`] once it is exhausted.
 #[cfg(feature = "alloc")]
@@ -154,6 +161,9 @@ impl<'a> RecordType<'a> {
     fn write(&self, buf: &mut Buffer) -> Result<'a, ()> {
         match self {
             RecordType::Text { enc, txt } => {
+                if enc.is_empty() || enc.len() > MAX_LANGUAGE_LEN || !enc.is_ascii() {
+                    return Err(Error::InvalidLanguageCode);
+                }
                 // force utf-8 encoding here
                 write_u8(buf, enc.len() as u8)?;
                 write_all(buf, enc.as_bytes())?;
@@ -446,26 +456,57 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                         if payload_data.is_empty() {
                             return Err(Error::SliceTooShort);
                         }
-                        let enc_len = (payload_data[0] & 0x1f) as usize;
-                        let is_utf16 = (payload_data[0] & 0x80) != 0;
+                        let status = payload_data[0];
+                        if status & TEXT_RESERVED_MASK != 0 {
+                            return Err(Error::InvalidTextStatus);
+                        }
+                        let enc_len = (status & TEXT_LANGUAGE_LEN_MASK) as usize;
+                        let is_utf16 = (status & TEXT_UTF16_MASK) != 0;
+                        if enc_len == 0 {
+                            return Err(Error::InvalidLanguageCode);
+                        }
                         if payload_data.len() < enc_len + 1 {
                             return Err(Error::SliceTooShort);
                         }
                         let enc = core::str::from_utf8(&payload_data[1..enc_len + 1])?;
+                        if !enc.is_ascii() {
+                            return Err(Error::InvalidLanguageCode);
+                        }
                         let txt = if is_utf16 {
                             #[cfg(not(feature = "alloc"))]
                             return Err(Error::UnsupportedEncoding);
                             #[cfg(feature = "alloc")]
                             {
-                                let utf16_bytes = &payload_data[enc_len + 1..];
+                                let mut utf16_bytes = &payload_data[enc_len + 1..];
                                 // Ensure the byte slice has an even length (UTF-16 is 2 bytes per unit)
                                 if utf16_bytes.len() % 2 != 0 {
                                     return Err(Error::UTF16OddLength(utf16_bytes.len()));
                                 }
+                                // A byte order mark chooses the endianness and
+                                // is not part of the text. Big endian is the
+                                // default when it is absent.
+                                let little_endian = match utf16_bytes.get(..2) {
+                                    Some([0xFF, 0xFE]) => {
+                                        utf16_bytes = &utf16_bytes[2..];
+                                        true
+                                    }
+                                    Some([0xFE, 0xFF]) => {
+                                        utf16_bytes = &utf16_bytes[2..];
+                                        false
+                                    }
+                                    _ => false,
+                                };
                                 // Convert the byte slice into u16 units
                                 let utf16_units: Vec<u16> = utf16_bytes
                                     .chunks(2)
-                                    .map(|chunk| u16::from_be_bytes(chunk.try_into().unwrap()))
+                                    .map(|chunk| {
+                                        let unit = [chunk[0], chunk[1]];
+                                        if little_endian {
+                                            u16::from_le_bytes(unit)
+                                        } else {
+                                            u16::from_be_bytes(unit)
+                                        }
+                                    })
                                     .collect();
                                 String::from_utf16(&utf16_units).map_err(|_| Error::UTF16Decode)?
                             }
@@ -631,6 +672,111 @@ mod tests {
         #[cfg(not(feature = "alloc"))]
         assert_eq!(record.get_type().unwrap().as_str(), "ex.com:t");
         assert_eq!(record.payload.type_len(), "ex.com:t".len());
+    }
+
+    /// 64 characters, the first length the status byte cannot describe.
+    const LONG_LANGUAGE: &str = concat!(
+        "aaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaa",
+    );
+
+    /// The status byte spends six bits on the language length, so a code of 32
+    /// characters is valid and must not spill into the text.
+    #[test]
+    fn test_rtd_text_long_language() {
+        assert_eq!(LONG_LANGUAGE.len(), 64);
+        let enc = &LONG_LANGUAGE[..32];
+        let mut raw = [0u8; 38];
+        raw[0] = 0xD1;
+        raw[1] = 0x01;
+        raw[2] = (1 + enc.len() + 1) as u8;
+        raw[3] = b'T';
+        raw[4] = enc.len() as u8;
+        raw[5..37].copy_from_slice(enc.as_bytes());
+        raw[37] = b'x';
+
+        let msg = Message::try_from(raw.as_slice()).unwrap();
+        match &msg.records[0].payload {
+            Payload::RTD(RecordType::Text { enc: parsed, txt }) => {
+                assert_eq!(*parsed, enc);
+                assert_eq!(&txt[..], "x");
+            }
+            _ => panic!("expected a text record"),
+        }
+        assert_eq!(msg.to_vec().unwrap().as_slice(), raw.as_slice());
+    }
+
+    /// The same text, with and without a byte order mark, decodes the same.
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn test_rtd_text_utf16_byte_order_mark() {
+        let encodings: [&[u8]; 3] = [
+            &[0x00, 0x41],             // big endian, no mark
+            &[0xFE, 0xFF, 0x00, 0x41], // big endian mark
+            &[0xFF, 0xFE, 0x41, 0x00], // little endian mark
+        ];
+        for encoded in encodings {
+            let mut raw = alloc::vec![
+                0xD1,
+                0x01,
+                (3 + encoded.len()) as u8,
+                b'T',
+                0x82,
+                b'f',
+                b'r'
+            ];
+            raw.extend_from_slice(encoded);
+            let msg = Message::try_from(raw.as_slice()).unwrap();
+            match &msg.records[0].payload {
+                Payload::RTD(RecordType::Text { enc, txt }) => {
+                    assert_eq!(*enc, "fr");
+                    assert_eq!(txt, "A");
+                }
+                _ => panic!("expected a text record"),
+            }
+        }
+    }
+
+    /// A status byte or language code outside the Text definition is refused.
+    #[test]
+    fn test_rtd_text_invalid_language() {
+        // reserved bit set
+        let raw = [0xD1, 0x01, 0x04, b'T', 0x42, b'f', b'r', b'x'];
+        assert_eq!(
+            Message::try_from(raw.as_slice()).unwrap_err(),
+            Error::InvalidTextStatus
+        );
+        // empty language code
+        let raw = [0xD1, 0x01, 0x02, b'T', 0x00, b'x'];
+        assert_eq!(
+            Message::try_from(raw.as_slice()).unwrap_err(),
+            Error::InvalidLanguageCode
+        );
+        // language code outside US-ASCII
+        let raw = [0xD1, 0x01, 0x05, b'T', 0x02, 0xC3, 0xA9, b'x', b'y'];
+        assert_eq!(
+            Message::try_from(raw.as_slice()).unwrap_err(),
+            Error::InvalidLanguageCode
+        );
+    }
+
+    /// The writer cannot emit a language code the status byte cannot describe.
+    #[test]
+    fn test_rtd_text_language_is_validated_on_write() {
+        for enc in ["", LONG_LANGUAGE, "é"] {
+            let txt = "x";
+            #[cfg(feature = "alloc")]
+            let txt = txt.to_string();
+            let mut msg = Message::default();
+            let rec1 = Record::new(None, Payload::RTD(RecordType::Text { enc, txt }));
+            #[cfg(feature = "alloc")]
+            msg.append_record(rec1);
+            #[cfg(not(feature = "alloc"))]
+            msg.append_record(rec1).unwrap();
+            assert_eq!(msg.to_vec().unwrap_err(), Error::InvalidLanguageCode);
+        }
     }
 
     /// A message without a record has no wire representation.

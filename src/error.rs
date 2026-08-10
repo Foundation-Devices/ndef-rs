@@ -17,6 +17,10 @@ pub enum Error<'a> {
     FieldTooLong,
     /// The message holds no record
     EmptyMessage,
+    /// The language code of a Text record is empty, too long or not US-ASCII
+    InvalidLanguageCode,
+    /// The status byte of a Text record has its reserved bit set
+    InvalidTextStatus,
     /// The type name format is not supported yet (to be implemented)
     UnsupportedTypeNameFormat(crate::TypeNameFormat),
     /// The provided external type does not contain a ':'
