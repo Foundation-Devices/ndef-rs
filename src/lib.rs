@@ -377,49 +377,51 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
         }
         let mut records = Vec::new();
         let mut offset = 0;
-        macro_rules! checked_add_offset {
-            ($inc:expr) => {{
-                if offset + $inc > slice.len() {
+        // Consumes the next `$len` bytes. `offset` is never advanced past
+        // `slice.len()`, so the remaining length is computed by subtraction
+        // instead of adding an encoded length to `offset`: a length field read
+        // from the input can be as large as `u32::MAX` and would otherwise
+        // overflow the addition on a 32-bit or smaller pointer width.
+        macro_rules! take {
+            ($len:expr) => {{
+                let len = $len;
+                if len > slice.len() - offset {
                     return Err(Error::SliceTooShort);
                 }
-                offset += $inc;
+                let start = offset;
+                offset += len;
+                &slice[start..offset]
             }};
         }
         while offset < slice.len() {
             // Header
-            checked_add_offset!(1);
-            let header = Header(slice[offset - 1]);
+            let header = Header(take!(1)[0]);
             // Type Length
-            checked_add_offset!(1);
-            let type_length = slice[offset - 1] as usize;
+            let type_length = take!(1)[0] as usize;
             // Payload Length
             let payload_length = if header.short_record() {
-                checked_add_offset!(1);
-                slice[offset - 1] as usize
+                take!(1)[0] as usize
             } else {
-                checked_add_offset!(4);
-                u32::from_be_bytes(slice[offset - 4..offset].try_into().unwrap()) as usize
+                let bytes = take!(4);
+                let length = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                usize::try_from(length).map_err(|_| Error::SliceTooShort)?
             };
             // ID Length
             let id_length = if header.id_length() {
-                checked_add_offset!(1);
-                slice[offset - 1] as usize
+                take!(1)[0] as usize
             } else {
                 0
             };
             // Type
-            checked_add_offset!(type_length);
-            let type_ = core::str::from_utf8(&slice[offset - type_length..offset])?;
+            let type_ = core::str::from_utf8(take!(type_length))?;
             // ID
             let id = if header.id_length() {
-                checked_add_offset!(id_length);
-                Some(&slice[offset - id_length..offset])
+                Some(take!(id_length))
             } else {
                 None
             };
             // Payload
-            checked_add_offset!(payload_length);
-            let payload_data = &slice[offset - payload_length..offset];
+            let payload_data = take!(payload_length);
             let payload = match header.type_name_format() {
                 TypeNameFormat::NfcWellKnown => Payload::RTD(match type_ {
                     "T" => {
@@ -591,5 +593,58 @@ mod tests {
         assert_eq!(&raw, msg.to_vec().as_slice());
         #[cfg(not(feature = "alloc"))]
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
+    }
+
+    /// A normal record announcing the largest encodable payload must be
+    /// rejected rather than overflow the running offset.
+    #[test]
+    fn test_parse_maximum_payload_length() {
+        for length in [
+            [0xFF, 0xFF, 0xFF, 0xFF],
+            [0xFF, 0xFF, 0xFF, 0xFE],
+            [0x80, 0x00, 0x00, 0x00],
+            [0x00, 0x00, 0x01, 0x00],
+        ] {
+            let raw = [
+                0xC1, 0x01, length[0], length[1], length[2], length[3], b'T', 0x02, b'f', b'r',
+            ];
+            assert_eq!(
+                Message::try_from(raw.as_slice()).unwrap_err(),
+                Error::SliceTooShort
+            );
+        }
+    }
+
+    /// Every truncation of a valid message must be a recoverable error.
+    #[test]
+    fn test_parse_truncated() {
+        let raw = [
+            0xD1, 0x01, 0x12, 0x54, 0x02, 0x66, 0x72, 0x55, 0x54, 0x46, 0x2D, 0x38, 0x20, 0x74,
+            0x65, 0x78, 0x74, 0x20, 0xf0, 0x9f, 0xa6, 0x80,
+        ];
+        for length in 0..raw.len() {
+            assert!(Message::try_from(&raw[..length]).is_err());
+        }
+        assert!(Message::try_from(raw.as_slice()).is_ok());
+    }
+
+    /// Arbitrary input must never panic, whatever the header claims.
+    #[test]
+    fn test_parse_arbitrary_input() {
+        let mut state = 0x1234_5678u32;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        let mut buf = [0u8; 64];
+        for _ in 0..4096 {
+            let len = (next() % (buf.len() as u32 + 1)) as usize;
+            for byte in buf.iter_mut().take(len) {
+                *byte = next() as u8;
+            }
+            let _ = Message::try_from(&buf[..len]);
+        }
     }
 }
