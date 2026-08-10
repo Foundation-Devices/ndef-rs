@@ -20,8 +20,11 @@ const CBOR_TYPE: &str = "cbor.io:cbor";
 
 /// Longest type or ID field an NDEF record can carry, both being announced by
 /// a single length octet.
-#[cfg(not(feature = "alloc"))]
 const MAX_FIELD_LEN: usize = u8::MAX as usize;
+
+/// Longest payload a short record can carry. Above it the record switches to
+/// the normal form, whose payload length is four big-endian octets.
+const MAX_SHORT_PAYLOAD_LEN: usize = u8::MAX as usize;
 
 /// Buffer holding serialized bytes. Without `alloc` the capacity is fixed and
 /// the serializer reports [`Error::BufferTooSmall`] once it is exhausted.
@@ -87,6 +90,9 @@ impl Header {
     }
     fn set_short_record(&mut self) {
         self.0 |= 0x10;
+    }
+    fn clr_short_record(&mut self) {
+        self.0 &= !0x10;
     }
 
     fn id_length(&self) -> bool {
@@ -343,14 +349,37 @@ impl<'a> Message<'a> {
     pub fn to_vec(&self) -> Result<'a, Buffer> {
         let mut buf = Buffer::new();
         for record in &self.records {
+            let payload_length = record.payload.len();
+            let short_record = payload_length <= MAX_SHORT_PAYLOAD_LEN;
+            // The short record bit describes the payload being written, not
+            // the one the record was built with.
+            let mut header = record.header.clone();
+            if short_record {
+                header.set_short_record();
+            } else {
+                header.clr_short_record();
+            }
             // Header
-            write_u8(&mut buf, record.header.0)?;
+            write_u8(&mut buf, header.0)?;
             // Type Length
-            write_u8(&mut buf, record.payload.type_len() as u8)?;
+            let type_length = record.payload.type_len();
+            if type_length > MAX_FIELD_LEN {
+                return Err(Error::FieldTooLong);
+            }
+            write_u8(&mut buf, type_length as u8)?;
             // Payload Length
-            write_u8(&mut buf, record.payload.len() as u8)?;
+            if short_record {
+                write_u8(&mut buf, payload_length as u8)?;
+            } else {
+                let payload_length =
+                    u32::try_from(payload_length).map_err(|_| Error::FieldTooLong)?;
+                write_all(&mut buf, &payload_length.to_be_bytes())?;
+            }
             // ID Length
             if let Some(id) = &record.id {
+                if id.len() > MAX_FIELD_LEN {
+                    return Err(Error::FieldTooLong);
+                }
                 write_u8(&mut buf, id.len() as u8)?;
             }
             // Type
@@ -619,6 +648,89 @@ mod tests {
         #[cfg(not(feature = "alloc"))]
         assert_eq!(record.get_type().unwrap().as_str(), "ex.com:t");
         assert_eq!(record.payload.type_len(), "ex.com:t".len());
+    }
+
+    /// A payload that no longer fits the short record form must switch to the
+    /// four octet length, and still round-trip.
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn test_payload_length_encoding() {
+        for length in [1usize, 254, 255, 256, 257, 1024] {
+            let data = alloc::vec![0x61; length];
+            let mut msg = Message::default();
+            let mut rec1 = Record::new(
+                None,
+                Payload::RTD(RecordType::External {
+                    domain: "ex.com",
+                    type_: "t",
+                    data: &data,
+                }),
+            );
+            msg.append_record(&mut rec1);
+            let raw = msg.to_vec().unwrap();
+            let short_record = raw[0] & 0x10 == 0x10;
+            assert_eq!(short_record, length < 256);
+            if short_record {
+                assert_eq!(raw[2] as usize, length);
+            } else {
+                assert_eq!(
+                    u32::from_be_bytes([raw[2], raw[3], raw[4], raw[5]]) as usize,
+                    length
+                );
+            }
+            assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+        }
+    }
+
+    /// Type and ID lengths are announced by a single octet, so anything longer
+    /// has to be refused rather than wrapped.
+    #[test]
+    #[cfg(feature = "alloc")]
+    fn test_field_length_limits() {
+        use alloc::string::String;
+
+        let id = [0x00; 256];
+        for (length, expected) in [(255, true), (256, false)] {
+            let mut msg = Message::default();
+            let mut rec1 = Record::new(
+                Some(&id[..length]),
+                Payload::RTD(RecordType::External {
+                    domain: "ex.com",
+                    type_: "t",
+                    data: &[0x61],
+                }),
+            );
+            msg.append_record(&mut rec1);
+            if expected {
+                let raw = msg.to_vec().unwrap();
+                assert_eq!(raw[3] as usize, length);
+                assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+            } else {
+                assert_eq!(msg.to_vec().unwrap_err(), Error::FieldTooLong);
+            }
+        }
+
+        // "<domain>:t" is one octet longer than the domain itself.
+        for (length, expected) in [(253, true), (254, false)] {
+            let domain = String::from_utf8(alloc::vec![b'a'; length]).unwrap();
+            let mut msg = Message::default();
+            let mut rec1 = Record::new(
+                None,
+                Payload::RTD(RecordType::External {
+                    domain: &domain,
+                    type_: "t",
+                    data: &[0x61],
+                }),
+            );
+            msg.append_record(&mut rec1);
+            if expected {
+                let raw = msg.to_vec().unwrap();
+                assert_eq!(raw[1] as usize, length + 2);
+                assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+            } else {
+                assert_eq!(msg.to_vec().unwrap_err(), Error::FieldTooLong);
+            }
+        }
     }
 
     /// A normal record announcing the largest encodable payload must be

@@ -13,6 +13,8 @@ pub enum Error<'a> {
     SliceTooShort,
     /// The encoding is not supported in this configuration
     UnsupportedEncoding,
+    /// A field is longer than the wire format can announce
+    FieldTooLong,
     /// The type name format is not supported yet (to be implemented)
     UnsupportedTypeNameFormat(crate::TypeNameFormat),
     /// The provided external type does not contain a ':'
