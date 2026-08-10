@@ -77,9 +77,6 @@ impl Header {
     fn set_message_end(&mut self) {
         self.0 |= 0x40;
     }
-    fn clr_message_end(&mut self) {
-        self.0 &= !0x40;
-    }
 
     // fn message_chunk(&self) -> bool {
     //     self.0 & 0x20 == 0x20
@@ -90,9 +87,6 @@ impl Header {
     }
     fn set_short_record(&mut self) {
         self.0 |= 0x10;
-    }
-    fn clr_short_record(&mut self) {
-        self.0 &= !0x10;
     }
 
     fn id_length(&self) -> bool {
@@ -116,7 +110,7 @@ impl Header {
         }
     }
     fn set_type_name_format(&mut self, tnf: TypeNameFormat) {
-        self.0 &= !0x70;
+        self.0 &= !0x07;
         self.0 |= match tnf {
             TypeNameFormat::Empty => 0x00,
             TypeNameFormat::NfcWellKnown => 0x01,
@@ -247,26 +241,39 @@ impl<'a> Payload<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record<'a> {
-    header: Header,
     id: Option<&'a [u8]>,
     pub payload: Payload<'a>,
 }
 
 impl<'a> Record<'a> {
     pub fn new(id: Option<&'a [u8]>, payload: Payload<'a>) -> Self {
+        Self { id, payload }
+    }
+
+    /// Identifier carried by the record, if any.
+    pub fn id(&self) -> Option<&'a [u8]> {
+        self.id
+    }
+
+    /// Wire header of the record, given its position in the message. Every bit
+    /// describes the bytes about to be written, so a payload replaced through
+    /// the public field cannot leave a stale flag behind.
+    fn header(&self, index: usize, count: usize) -> Header {
         let mut header = Header::default();
-        header.set_type_name_format(TypeNameFormat::from(&payload));
-        if id.is_some() {
-            header.set_id_length();
+        header.set_type_name_format(TypeNameFormat::from(&self.payload));
+        if index == 0 {
+            header.set_message_begin();
         }
-        if payload.len() < 256 {
+        if index + 1 == count {
+            header.set_message_end();
+        }
+        if self.payload.len() <= MAX_SHORT_PAYLOAD_LEN {
             header.set_short_record();
         }
-        Self {
-            header,
-            id,
-            payload,
+        if self.id.is_some() {
+            header.set_id_length();
         }
+        header
     }
 
     #[cfg(feature = "cbor")]
@@ -323,42 +330,26 @@ pub struct Message<'a> {
 
 impl<'a> Message<'a> {
     #[cfg(feature = "alloc")]
-    pub fn append_record(&mut self, record: &mut Record<'a>) {
-        if self.records.is_empty() {
-            record.header.set_message_begin();
-        } else {
-            self.records.last_mut().unwrap().header.clr_message_end();
-        }
-        record.header.set_message_end();
-        self.records.push(record.clone());
+    pub fn append_record(&mut self, record: Record<'a>) {
+        self.records.push(record);
     }
 
     #[cfg(not(feature = "alloc"))]
-    pub fn append_record(&mut self, record: &mut Record<'a>) -> Result<'_, ()> {
-        if self.records.is_empty() {
-            record.header.set_message_begin();
-        } else {
-            self.records.last_mut().unwrap().header.clr_message_end();
-        }
-        record.header.set_message_end();
-        self.records
-            .push(record.clone())
-            .map_err(|_| Error::BufferTooSmall)
+    pub fn append_record(&mut self, record: Record<'a>) -> Result<'a, ()> {
+        // `push` hands the record back untouched when the message is full, so
+        // a rejected append leaves the message exactly as it was.
+        self.records.push(record).map_err(|_| Error::BufferTooSmall)
     }
 
     pub fn to_vec(&self) -> Result<'a, Buffer> {
+        if self.records.is_empty() {
+            return Err(Error::EmptyMessage);
+        }
         let mut buf = Buffer::new();
-        for record in &self.records {
+        for (index, record) in self.records.iter().enumerate() {
             let payload_length = record.payload.len();
-            let short_record = payload_length <= MAX_SHORT_PAYLOAD_LEN;
-            // The short record bit describes the payload being written, not
-            // the one the record was built with.
-            let mut header = record.header.clone();
-            if short_record {
-                header.set_short_record();
-            } else {
-                header.clr_short_record();
-            }
+            let header = record.header(index, self.records.len());
+            let short_record = header.short_record();
             // Header
             write_u8(&mut buf, header.0)?;
             // Type Length
@@ -512,18 +503,10 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                 tnf => return Err(Error::UnsupportedTypeNameFormat(tnf)),
             };
             #[cfg(feature = "alloc")]
-            records.push(Record {
-                header,
-                id,
-                payload,
-            });
+            records.push(Record { id, payload });
             #[cfg(not(feature = "alloc"))]
             records
-                .push(Record {
-                    header,
-                    id,
-                    payload,
-                })
+                .push(Record { id, payload })
                 .map_err(|_| Error::SliceTooShort)?;
         }
         Ok(Message { records })
@@ -547,11 +530,11 @@ mod tests {
         let txt = "UTF-8 text 🦀";
         #[cfg(feature = "alloc")]
         let txt = txt.to_string();
-        let mut rec1 = Record::new(None, Payload::RTD(RecordType::Text { enc: "fr", txt }));
+        let rec1 = Record::new(None, Payload::RTD(RecordType::Text { enc: "fr", txt }));
         #[cfg(feature = "alloc")]
-        msg.append_record(&mut rec1);
+        msg.append_record(rec1);
         #[cfg(not(feature = "alloc"))]
-        msg.append_record(&mut rec1).unwrap();
+        msg.append_record(rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
@@ -564,14 +547,14 @@ mod tests {
             0x74, 0x00, 0x20, 0xd8, 0x3e, 0xdd, 0x80,
         ];
         let mut msg = Message::default();
-        let mut rec1 = Record::new(
+        let rec1 = Record::new(
             None,
             Payload::RTD(RecordType::Text {
                 enc: "fr",
                 txt: "UTF-16 text 🦀".to_string(),
             }),
         );
-        msg.append_record(&mut rec1);
+        msg.append_record(rec1);
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
     }
     #[test]
@@ -580,7 +563,7 @@ mod tests {
             0xD4, 0x08, 0x01, 0x65, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x3a, 0x74, 0x61,
         ];
         let mut msg = Message::default();
-        let mut rec1 = Record::new(
+        let rec1 = Record::new(
             None,
             Payload::RTD(RecordType::External {
                 domain: "ex.com",
@@ -589,9 +572,9 @@ mod tests {
             }),
         );
         #[cfg(feature = "alloc")]
-        msg.append_record(&mut rec1);
+        msg.append_record(rec1);
         #[cfg(not(feature = "alloc"))]
-        msg.append_record(&mut rec1).unwrap();
+        msg.append_record(rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
@@ -604,13 +587,13 @@ mod tests {
         ];
         let mut msg = Message::default();
         #[cfg(feature = "alloc")]
-        let mut rec1 = Record::new(None, Payload::RTD(RecordType::Cbor(alloc::vec![0x61])));
+        let rec1 = Record::new(None, Payload::RTD(RecordType::Cbor(alloc::vec![0x61])));
         #[cfg(not(feature = "alloc"))]
-        let mut rec1 = Record::new(None, Payload::RTD(RecordType::Cbor(&[0x61])));
+        let rec1 = Record::new(None, Payload::RTD(RecordType::Cbor(&[0x61])));
         #[cfg(feature = "alloc")]
-        msg.append_record(&mut rec1);
+        msg.append_record(rec1);
         #[cfg(not(feature = "alloc"))]
-        msg.append_record(&mut rec1).unwrap();
+        msg.append_record(rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
@@ -650,6 +633,99 @@ mod tests {
         assert_eq!(record.payload.type_len(), "ex.com:t".len());
     }
 
+    /// A message without a record has no wire representation.
+    #[test]
+    fn test_empty_message() {
+        assert_eq!(
+            Message::default().to_vec().unwrap_err(),
+            Error::EmptyMessage
+        );
+    }
+
+    /// Replacing a payload through the public field must be reflected by the
+    /// header that describes it.
+    #[test]
+    fn test_payload_replaced_after_append() {
+        let mut msg = Message::default();
+        let txt = "a";
+        #[cfg(feature = "alloc")]
+        let txt = txt.to_string();
+        let rec1 = Record::new(None, Payload::RTD(RecordType::Text { enc: "fr", txt }));
+        #[cfg(feature = "alloc")]
+        msg.append_record(rec1);
+        #[cfg(not(feature = "alloc"))]
+        msg.append_record(rec1).unwrap();
+
+        msg.records[0].payload = Payload::RTD(RecordType::External {
+            domain: "ex.com",
+            type_: "t",
+            data: &[0x61],
+        });
+        let raw = msg.to_vec().unwrap();
+        assert_eq!(
+            Header(raw[0]).type_name_format(),
+            TypeNameFormat::NfcExternal
+        );
+        assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+    }
+
+    /// Message begin and message end follow the position of the record, so the
+    /// same record can be appended more than once.
+    #[test]
+    fn test_record_appended_twice() {
+        let mut msg = Message::default();
+        let record = Record::new(
+            None,
+            Payload::RTD(RecordType::External {
+                domain: "ex.com",
+                type_: "t",
+                data: &[0x61],
+            }),
+        );
+        #[cfg(feature = "alloc")]
+        {
+            msg.append_record(record.clone());
+            msg.append_record(record);
+        }
+        #[cfg(not(feature = "alloc"))]
+        {
+            msg.append_record(record.clone()).unwrap();
+            msg.append_record(record).unwrap();
+        }
+        let raw = msg.to_vec().unwrap();
+        // begin without end, then end without begin
+        assert_eq!(raw[0] & 0xC0, 0x80);
+        assert_eq!(raw[raw.len() - 12] & 0xC0, 0x40);
+        assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
+    }
+
+    /// A rejected append leaves the message untouched.
+    #[test]
+    #[cfg(not(feature = "alloc"))]
+    fn test_append_beyond_capacity() {
+        let mut msg = Message::default();
+        let record = Record::new(
+            None,
+            Payload::RTD(RecordType::External {
+                domain: "ex.com",
+                type_: "t",
+                data: &[0x61],
+            }),
+        );
+        for _ in 0..8 {
+            msg.append_record(record.clone()).unwrap();
+        }
+        let full = msg.clone();
+        assert_eq!(
+            msg.append_record(record).unwrap_err(),
+            Error::BufferTooSmall
+        );
+        assert_eq!(msg, full);
+        // the last record still ends the message
+        let raw = msg.to_vec().unwrap();
+        assert_eq!(raw[raw.len() - 12] & 0x40, 0x40);
+    }
+
     /// A payload that no longer fits the short record form must switch to the
     /// four octet length, and still round-trip.
     #[test]
@@ -658,7 +734,7 @@ mod tests {
         for length in [1usize, 254, 255, 256, 257, 1024] {
             let data = alloc::vec![0x61; length];
             let mut msg = Message::default();
-            let mut rec1 = Record::new(
+            let rec1 = Record::new(
                 None,
                 Payload::RTD(RecordType::External {
                     domain: "ex.com",
@@ -666,7 +742,7 @@ mod tests {
                     data: &data,
                 }),
             );
-            msg.append_record(&mut rec1);
+            msg.append_record(rec1);
             let raw = msg.to_vec().unwrap();
             let short_record = raw[0] & 0x10 == 0x10;
             assert_eq!(short_record, length < 256);
@@ -692,7 +768,7 @@ mod tests {
         let id = [0x00; 256];
         for (length, expected) in [(255, true), (256, false)] {
             let mut msg = Message::default();
-            let mut rec1 = Record::new(
+            let rec1 = Record::new(
                 Some(&id[..length]),
                 Payload::RTD(RecordType::External {
                     domain: "ex.com",
@@ -700,7 +776,7 @@ mod tests {
                     data: &[0x61],
                 }),
             );
-            msg.append_record(&mut rec1);
+            msg.append_record(rec1);
             if expected {
                 let raw = msg.to_vec().unwrap();
                 assert_eq!(raw[3] as usize, length);
@@ -714,7 +790,7 @@ mod tests {
         for (length, expected) in [(253, true), (254, false)] {
             let domain = String::from_utf8(alloc::vec![b'a'; length]).unwrap();
             let mut msg = Message::default();
-            let mut rec1 = Record::new(
+            let rec1 = Record::new(
                 None,
                 Payload::RTD(RecordType::External {
                     domain: &domain,
@@ -722,7 +798,7 @@ mod tests {
                     data: &[0x61],
                 }),
             );
-            msg.append_record(&mut rec1);
+            msg.append_record(rec1);
             if expected {
                 let raw = msg.to_vec().unwrap();
                 assert_eq!(raw[1] as usize, length + 2);

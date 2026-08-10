@@ -15,6 +15,8 @@ pub enum Error<'a> {
     UnsupportedEncoding,
     /// A field is longer than the wire format can announce
     FieldTooLong,
+    /// The message holds no record
+    EmptyMessage,
     /// The type name format is not supported yet (to be implemented)
     UnsupportedTypeNameFormat(crate::TypeNameFormat),
     /// The provided external type does not contain a ':'

@@ -43,7 +43,7 @@ version and rules out bare-metal targets.
 ### Cargo.toml
 
     [dependencies]
-    ndef = "0.5.0"
+    ndef = { version = "0.5.0", features = ["alloc"] }
     
 
 ### main.rs  
@@ -52,16 +52,20 @@ use ndef::{Message, Payload, Record, RecordType};
 
 fn main() {
     let mut msg = Message::default();
-    let mut rec1 = Record::new(
+    let rec1 = Record::new(
         None,
         Payload::RTD(RecordType::Text {
             enc: "en",
-            txt: "NDEF Text from Rust🦀!",
+            txt: "NDEF Text from Rust🦀!".to_string(),
         }),
     );
-    msg.append_record(&mut rec1).unwrap();
+    msg.append_record(rec1);
 
     // Print message raw data
     println!("message raw data: {:?}", msg.to_vec().unwrap().as_slice());
 }
 ```
+
+Without `alloc`, `txt` is a `&str` and `append_record` reports that the
+message is full, so the same program ends with
+`msg.append_record(rec1).unwrap();`.
