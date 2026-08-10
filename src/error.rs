@@ -4,12 +4,15 @@
 use derive_more::From;
 
 #[derive(Debug, From, PartialEq)]
+#[non_exhaustive]
 pub enum Error<'a> {
     #[cfg(not(feature = "alloc"))]
     /// The destination buffer is too small
     BufferTooSmall,
     /// The provided slice is too short
     SliceTooShort,
+    /// The encoding is not supported in this configuration
+    UnsupportedEncoding,
     /// The type name format is not supported yet (to be implemented)
     UnsupportedTypeNameFormat(crate::TypeNameFormat),
     /// The provided external type does not contain a ':'

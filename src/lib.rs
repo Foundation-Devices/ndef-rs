@@ -14,6 +14,37 @@ use alloc::{format, string::String, vec::Vec};
 #[cfg(not(feature = "alloc"))]
 use heapless::Vec;
 
+/// Wire type name of the CBOR external record.
+#[cfg(feature = "cbor")]
+const CBOR_TYPE: &str = "cbor.io:cbor";
+
+/// Longest type or ID field an NDEF record can carry, both being announced by
+/// a single length octet.
+#[cfg(not(feature = "alloc"))]
+const MAX_FIELD_LEN: usize = u8::MAX as usize;
+
+/// Buffer holding serialized bytes. Without `alloc` the capacity is fixed and
+/// the serializer reports [`Error::BufferTooSmall`] once it is exhausted.
+#[cfg(feature = "alloc")]
+pub type Buffer = Vec<u8>;
+#[cfg(not(feature = "alloc"))]
+pub type Buffer = Vec<u8, 256>;
+
+#[cfg(feature = "alloc")]
+fn write_all<'a>(buf: &mut Buffer, data: &[u8]) -> Result<'a, ()> {
+    buf.extend_from_slice(data);
+    Ok(())
+}
+#[cfg(not(feature = "alloc"))]
+fn write_all<'a>(buf: &mut Buffer, data: &[u8]) -> Result<'a, ()> {
+    buf.extend_from_slice(data)
+        .map_err(|_| Error::BufferTooSmall)
+}
+
+fn write_u8<'a>(buf: &mut Buffer, byte: u8) -> Result<'a, ()> {
+    write_all(buf, &[byte])
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypeNameFormat {
     Empty,
@@ -120,41 +151,40 @@ impl<'a> RecordType<'a> {
         }
     }
 
-    #[cfg(feature = "alloc")]
-    fn to_vec(&self) -> Vec<u8> {
+    fn write(&self, buf: &mut Buffer) -> Result<'a, ()> {
         match self {
             RecordType::Text { enc, txt } => {
-                let mut data = Vec::new();
                 // force utf-8 encoding here
-                data.push(enc.len() as u8);
-                data.extend_from_slice(enc.as_bytes());
-                data.extend_from_slice(txt.as_bytes());
-                data
+                write_u8(buf, enc.len() as u8)?;
+                write_all(buf, enc.as_bytes())?;
+                write_all(buf, txt.as_bytes())
             }
-            RecordType::External { data, .. } => data.to_vec(),
+            RecordType::External { data, .. } => write_all(buf, data),
             #[cfg(feature = "cbor")]
-            RecordType::Cbor(data) => data.clone(),
+            RecordType::Cbor(data) => write_all(buf, data),
         }
     }
-    #[cfg(not(feature = "alloc"))]
-    fn to_vec(&self) -> Result<'_, Vec<u8, 256>> {
+
+    /// Length of the wire type name.
+    fn type_len(&self) -> usize {
         match self {
-            RecordType::Text { enc, txt } => {
-                let mut data = Vec::new();
-                // force utf-8 encoding here
-                data.push(enc.len() as u8)
-                    .map_err(|_| Error::BufferTooSmall)?;
-                data.extend_from_slice(enc.as_bytes())
-                    .map_err(|_| Error::BufferTooSmall)?;
-                data.extend_from_slice(txt.as_bytes())
-                    .map_err(|_| Error::BufferTooSmall)?;
-                Ok(data)
-            }
-            RecordType::External { data, .. } => {
-                Vec::from_slice(data).map_err(|_| Error::BufferTooSmall)
+            RecordType::Text { .. } => 1,
+            RecordType::External { domain, type_, .. } => domain.len() + 1 + type_.len(),
+            #[cfg(feature = "cbor")]
+            RecordType::Cbor(_) => CBOR_TYPE.len(),
+        }
+    }
+
+    fn write_type(&self, buf: &mut Buffer) -> Result<'a, ()> {
+        match self {
+            RecordType::Text { .. } => write_all(buf, b"T"),
+            RecordType::External { domain, type_, .. } => {
+                write_all(buf, domain.as_bytes())?;
+                write_u8(buf, b':')?;
+                write_all(buf, type_.as_bytes())
             }
             #[cfg(feature = "cbor")]
-            RecordType::Cbor(data) => Vec::from_slice(data).map_err(|_| Error::BufferTooSmall),
+            RecordType::Cbor(_) => write_all(buf, CBOR_TYPE.as_bytes()),
         }
     }
 }
@@ -182,18 +212,24 @@ impl<'a> Payload<'a> {
         }
     }
 
-    #[cfg(feature = "alloc")]
-    fn to_vec(&self) -> Vec<u8> {
+    fn write(&self, buf: &mut Buffer) -> Result<'a, ()> {
         match self {
-            Payload::RTD(rtd) => rtd.to_vec(),
+            Payload::RTD(rtd) => rtd.write(buf),
         }
     }
-    #[cfg(not(feature = "alloc"))]
-    fn to_vec(&self) -> Result<'_, Vec<u8, 256>> {
+
+    fn type_len(&self) -> usize {
         match self {
-            Payload::RTD(rtd) => rtd.to_vec(),
+            Payload::RTD(rtd) => rtd.type_len(),
         }
     }
+
+    fn write_type(&self, buf: &mut Buffer) -> Result<'a, ()> {
+        match self {
+            Payload::RTD(rtd) => rtd.write_type(buf),
+        }
+    }
+
     #[cfg(feature = "dcbor")]
     pub fn from_cbor_encodable<T>(x: &T) -> Self
     where
@@ -241,33 +277,33 @@ impl<'a> Record<'a> {
                 RecordType::Text { .. } => "T".to_string(),
                 RecordType::External { domain, type_, .. } => format!("{domain}:{type_}"),
                 #[cfg(feature = "cbor")]
-                RecordType::Cbor(_) => "cbor.io:cbor".to_string(),
+                RecordType::Cbor(_) => CBOR_TYPE.to_string(),
             },
         }
     }
     #[cfg(not(feature = "alloc"))]
-    pub fn get_type(&self) -> &'a str {
+    pub fn get_type(&self) -> Result<'a, heapless::String<MAX_FIELD_LEN>> {
+        let mut type_name = heapless::String::new();
         match &self.payload {
             Payload::RTD(rtd) => match rtd {
-                RecordType::Text { .. } => "T",
-                RecordType::External {
-                    domain: _,
-                    type_: _,
-                    ..
-                } => unimplemented!("can't concat without alloc"),
+                RecordType::Text { .. } => type_name.push_str("T"),
+                RecordType::External { domain, type_, .. } => type_name
+                    .push_str(domain)
+                    .and_then(|()| type_name.push(':'))
+                    .and_then(|()| type_name.push_str(type_)),
                 #[cfg(feature = "cbor")]
-                RecordType::Cbor(_) => "cbor.io:cbor",
+                RecordType::Cbor(_) => type_name.push_str(CBOR_TYPE),
             },
         }
+        .map_err(|_| Error::BufferTooSmall)?;
+        Ok(type_name)
     }
 
-    #[cfg(feature = "alloc")]
-    pub fn payload(&self) -> Vec<u8> {
-        self.payload.to_vec()
-    }
-    #[cfg(not(feature = "alloc"))]
-    pub fn payload(&self) -> Result<'_, Vec<u8, 256>> {
-        self.payload.to_vec()
+    /// Encoded payload of the record.
+    pub fn payload(&self) -> Result<'a, Buffer> {
+        let mut buf = Buffer::new();
+        self.payload.write(&mut buf)?;
+        Ok(buf)
     }
 }
 
@@ -304,65 +340,27 @@ impl<'a> Message<'a> {
             .map_err(|_| Error::BufferTooSmall)
     }
 
-    #[cfg(feature = "alloc")]
-    pub fn to_vec(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
+    pub fn to_vec(&self) -> Result<'a, Buffer> {
+        let mut buf = Buffer::new();
         for record in &self.records {
-            let type_ = record.get_type();
-            let payload_data = record.payload();
             // Header
-            buf.push(record.header.0);
+            write_u8(&mut buf, record.header.0)?;
             // Type Length
-            buf.push(type_.len() as u8);
+            write_u8(&mut buf, record.payload.type_len() as u8)?;
             // Payload Length
-            buf.push(payload_data.len() as u8);
+            write_u8(&mut buf, record.payload.len() as u8)?;
             // ID Length
             if let Some(id) = &record.id {
-                buf.push(id.len() as u8);
+                write_u8(&mut buf, id.len() as u8)?;
             }
             // Type
-            buf.extend_from_slice(type_.as_bytes());
+            record.payload.write_type(&mut buf)?;
             // ID
             if let Some(id) = &record.id {
-                buf.extend_from_slice(id);
+                write_all(&mut buf, id)?;
             }
             // Payload
-            buf.extend_from_slice(payload_data.as_slice());
-        }
-        buf
-    }
-
-    #[cfg(not(feature = "alloc"))]
-    pub fn to_vec(&self) -> Result<'_, Vec<u8, 256>> {
-        let mut buf = Vec::new();
-        for record in &self.records {
-            let type_ = record.get_type();
-            let payload_data = record.payload()?;
-            // Header
-            buf.push(record.header.0)
-                .map_err(|_| Error::BufferTooSmall)?;
-            // Type Length
-            buf.push(type_.len() as u8)
-                .map_err(|_| Error::BufferTooSmall)?;
-            // Payload Length
-            buf.push(payload_data.len() as u8)
-                .map_err(|_| Error::BufferTooSmall)?;
-            // ID Length
-            if let Some(id) = &record.id {
-                buf.push(id.len() as u8)
-                    .map_err(|_| Error::BufferTooSmall)?;
-            }
-            // Type
-            buf.extend_from_slice(type_.as_bytes())
-                .map_err(|_| Error::BufferTooSmall)?;
-            // ID
-            if let Some(id) = &record.id {
-                buf.extend_from_slice(id)
-                    .map_err(|_| Error::BufferTooSmall)?;
-            }
-            // Payload
-            buf.extend_from_slice(payload_data.as_slice())
-                .map_err(|_| Error::BufferTooSmall)?;
+            record.payload.write(&mut buf)?;
         }
         Ok(buf)
     }
@@ -436,7 +434,7 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                         let enc = core::str::from_utf8(&payload_data[1..enc_len + 1])?;
                         let txt = if is_utf16 {
                             #[cfg(not(feature = "alloc"))]
-                            unimplemented!("UTF-16 decoding is not supported yet");
+                            return Err(Error::UnsupportedEncoding);
                             #[cfg(feature = "alloc")]
                             {
                                 let utf16_bytes = &payload_data[enc_len + 1..];
@@ -465,9 +463,9 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                 }),
                 TypeNameFormat::NfcExternal => match type_ {
                     #[cfg(all(feature = "cbor", not(feature = "alloc")))]
-                    "cbor.io:cbor" => Payload::RTD(RecordType::Cbor(payload_data)),
+                    CBOR_TYPE => Payload::RTD(RecordType::Cbor(payload_data)),
                     #[cfg(all(feature = "cbor", feature = "alloc"))]
-                    "cbor.io:cbor" => Payload::RTD(RecordType::Cbor(payload_data.to_vec())),
+                    CBOR_TYPE => Payload::RTD(RecordType::Cbor(payload_data.to_vec())),
                     _ => {
                         if let Some(index) = type_.find(':') {
                             let domain = &type_[..index];
@@ -526,9 +524,6 @@ mod tests {
         #[cfg(not(feature = "alloc"))]
         msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
-        #[cfg(feature = "alloc")]
-        assert_eq!(&raw, msg.to_vec().as_slice());
-        #[cfg(not(feature = "alloc"))]
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
     #[test]
@@ -569,8 +564,7 @@ mod tests {
         #[cfg(not(feature = "alloc"))]
         msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
-        #[cfg(feature = "alloc")]
-        assert_eq!(&raw, msg.to_vec().as_slice());
+        assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
     }
     #[test]
     #[cfg(feature = "cbor")]
@@ -589,10 +583,42 @@ mod tests {
         #[cfg(not(feature = "alloc"))]
         msg.append_record(&mut rec1).unwrap();
         assert_eq!(msg, Message::try_from(raw.as_slice()).unwrap());
-        #[cfg(feature = "alloc")]
-        assert_eq!(&raw, msg.to_vec().as_slice());
-        #[cfg(not(feature = "alloc"))]
         assert_eq!(&raw, msg.to_vec().unwrap().as_slice());
+    }
+
+    /// A UTF-16 Text record is selected by one bit of the wire status byte, so
+    /// a configuration that cannot decode it must still report an error.
+    #[test]
+    #[cfg(not(feature = "alloc"))]
+    fn test_rtd_text_utf16_unsupported() {
+        let raw = [
+            0xD1, 0x01, 0x1F, 0x54, 0x82, 0x66, 0x72, 0x00, 0x55, 0x00, 0x54, 0x00, 0x46, 0x00,
+            0x2D, 0x00, 0x31, 0x00, 0x36, 0x00, 0x20, 0x00, 0x74, 0x00, 0x65, 0x00, 0x78, 0x00,
+            0x74, 0x00, 0x20, 0xd8, 0x3e, 0xdd, 0x80,
+        ];
+        assert_eq!(
+            Message::try_from(raw.as_slice()).unwrap_err(),
+            Error::UnsupportedEncoding
+        );
+    }
+
+    /// The external type name is assembled straight into the output, so it
+    /// needs no allocator.
+    #[test]
+    fn test_rtd_external_type_name() {
+        let record = Record::new(
+            None,
+            Payload::RTD(RecordType::External {
+                domain: "ex.com",
+                type_: "t",
+                data: &[0x61],
+            }),
+        );
+        #[cfg(feature = "alloc")]
+        assert_eq!(record.get_type(), "ex.com:t");
+        #[cfg(not(feature = "alloc"))]
+        assert_eq!(record.get_type().unwrap().as_str(), "ex.com:t");
+        assert_eq!(record.payload.type_len(), "ex.com:t".len());
     }
 
     /// A normal record announcing the largest encodable payload must be
