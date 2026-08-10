@@ -55,6 +55,23 @@ fn write_u8<'a>(buf: &mut Buffer, byte: u8) -> Result<'a, ()> {
     write_all(buf, &[byte])
 }
 
+/// An external type name is a domain name, a colon and a type name. Both parts
+/// are US-ASCII and neither may be empty; the colon separating them cannot
+/// appear again inside the type name. Case is preserved as given, while the
+/// format compares external type names case insensitively.
+fn check_external_type<'a>(domain: &'a str, type_: &'a str) -> Result<'a, ()> {
+    let domain_byte =
+        |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.' || byte == b'_';
+    if domain.is_empty() || !domain.bytes().all(domain_byte) {
+        return Err(Error::InvalidExternalType(domain));
+    }
+    let type_byte = |byte: u8| byte.is_ascii_graphic() && byte != b':';
+    if type_.is_empty() || !type_.bytes().all(type_byte) {
+        return Err(Error::InvalidExternalType(type_));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypeNameFormat {
     Empty,
@@ -189,6 +206,7 @@ impl<'a> RecordType<'a> {
         match self {
             RecordType::Text { .. } => write_all(buf, b"T"),
             RecordType::External { domain, type_, .. } => {
+                check_external_type(domain, type_)?;
                 write_all(buf, domain.as_bytes())?;
                 write_u8(buf, b':')?;
                 write_all(buf, type_.as_bytes())
@@ -546,6 +564,7 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                         if let Some(index) = type_.find(':') {
                             let domain = &type_[..index];
                             let type_ = &type_[index + 1..];
+                            check_external_type(domain, type_)?;
                             Payload::RTD(RecordType::External {
                                 domain,
                                 type_,
@@ -691,6 +710,62 @@ mod tests {
         #[cfg(not(feature = "alloc"))]
         assert_eq!(record.get_type().unwrap().as_str(), "ex.com:t");
         assert_eq!(record.payload.type_len(), "ex.com:t".len());
+    }
+
+    /// A colon alone does not make an external type name.
+    #[test]
+    fn test_rtd_external_type_grammar() {
+        // an empty domain, an empty type name, then a domain outside US-ASCII
+        for raw in [
+            [0xD4, 0x02, 0x01, b':', b'x', 0x61].as_slice(),
+            [0xD4, 0x02, 0x01, b'x', b':', 0x61].as_slice(),
+            [0xD4, 0x04, 0x01, 0xC3, 0xA9, b':', b't', 0x61].as_slice(),
+        ] {
+            assert!(matches!(
+                Message::try_from(raw).unwrap_err(),
+                Error::InvalidExternalType(_)
+            ));
+        }
+        // the shortest name the grammar allows, spelled as given
+        let raw = [0xD4, 0x03, 0x01, b'A', b':', b'b', 0x61];
+        let msg = Message::try_from(raw.as_slice()).unwrap();
+        match &msg.records[0].payload {
+            Payload::RTD(RecordType::External { domain, type_, .. }) => {
+                assert_eq!(*domain, "A");
+                assert_eq!(*type_, "b");
+            }
+            _ => panic!("expected an external record"),
+        }
+        assert_eq!(msg.to_vec().unwrap().as_slice(), raw.as_slice());
+    }
+
+    /// The serializer cannot emit an external type the parser would refuse.
+    #[test]
+    fn test_rtd_external_type_is_validated_on_write() {
+        for (domain, type_) in [
+            ("", "t"),
+            ("ex.com", ""),
+            ("ex com", "t"),
+            ("ex.com", "t:x"),
+        ] {
+            let mut msg = Message::default();
+            let rec1 = Record::new(
+                None,
+                Payload::RTD(RecordType::External {
+                    domain,
+                    type_,
+                    data: &[0x61],
+                }),
+            );
+            #[cfg(feature = "alloc")]
+            msg.append_record(rec1);
+            #[cfg(not(feature = "alloc"))]
+            msg.append_record(rec1).unwrap();
+            assert!(matches!(
+                msg.to_vec().unwrap_err(),
+                Error::InvalidExternalType(_)
+            ));
+        }
     }
 
     /// The record boundary flags say where a message starts and stops, so a
