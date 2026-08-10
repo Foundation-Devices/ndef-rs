@@ -21,6 +21,10 @@ pub enum Error<'a> {
     InvalidLanguageCode,
     /// The status byte of a Text record has its reserved bit set
     InvalidTextStatus,
+    /// A record does not begin or end the message where the format requires it
+    InvalidFraming,
+    /// The record is a chunk of a larger payload, which is not supported
+    UnsupportedChunkedRecord,
     /// The type name format is not supported yet (to be implemented)
     UnsupportedTypeNameFormat(crate::TypeNameFormat),
     /// The provided external type does not contain a ':'

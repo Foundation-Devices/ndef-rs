@@ -71,23 +71,23 @@ pub enum TypeNameFormat {
 struct Header(u8);
 
 impl Header {
-    // fn message_begin(&self) -> bool {
-    //     self.0 & 0x80 == 0x80
-    // }
+    fn message_begin(&self) -> bool {
+        self.0 & 0x80 == 0x80
+    }
     fn set_message_begin(&mut self) {
         self.0 |= 0x80;
     }
 
-    // fn message_end(&self) -> bool {
-    //     self.0 & 0x40 == 0x40
-    // }
+    fn message_end(&self) -> bool {
+        self.0 & 0x40 == 0x40
+    }
     fn set_message_end(&mut self) {
         self.0 |= 0x40;
     }
 
-    // fn message_chunk(&self) -> bool {
-    //     self.0 & 0x20 == 0x20
-    // }
+    fn message_chunk(&self) -> bool {
+        self.0 & 0x20 == 0x20
+    }
 
     fn short_record(&self) -> bool {
         self.0 & 0x10 == 0x10
@@ -421,9 +421,24 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                 &slice[start..offset]
             }};
         }
+        let mut ended = false;
         while offset < slice.len() {
+            // Nothing may follow the record that ended the message.
+            if ended {
+                return Err(Error::InvalidFraming);
+            }
             // Header
             let header = Header(take!(1)[0]);
+            // Only the first record begins the message.
+            if header.message_begin() != records.is_empty() {
+                return Err(Error::InvalidFraming);
+            }
+            // A chunk carries part of a payload, which is never a record on
+            // its own.
+            if header.message_chunk() {
+                return Err(Error::UnsupportedChunkedRecord);
+            }
+            ended = header.message_end();
             // Type Length
             let type_length = take!(1)[0] as usize;
             // Payload Length
@@ -550,6 +565,10 @@ impl<'a> TryFrom<&'a [u8]> for Message<'a> {
                 .push(Record { id, payload })
                 .map_err(|_| Error::SliceTooShort)?;
         }
+        // The last record has to end the message.
+        if !ended {
+            return Err(Error::InvalidFraming);
+        }
         Ok(Message { records })
     }
 }
@@ -672,6 +691,53 @@ mod tests {
         #[cfg(not(feature = "alloc"))]
         assert_eq!(record.get_type().unwrap().as_str(), "ex.com:t");
         assert_eq!(record.payload.type_len(), "ex.com:t".len());
+    }
+
+    /// The record boundary flags say where a message starts and stops, so a
+    /// message that contradicts them is not a message.
+    #[test]
+    fn test_message_framing() {
+        // a complete one record message, header flags aside
+        let record = |header: u8| [header, 0x01, 0x04, b'T', 0x02, b'f', b'r', b'x'];
+
+        assert!(Message::try_from(record(0xD1).as_slice()).is_ok());
+        // no record begins the message
+        assert_eq!(
+            Message::try_from(record(0x51).as_slice()).unwrap_err(),
+            Error::InvalidFraming
+        );
+        // no record ends the message
+        assert_eq!(
+            Message::try_from(record(0x91).as_slice()).unwrap_err(),
+            Error::InvalidFraming
+        );
+        // a chunk that also claims to end the message
+        assert_eq!(
+            Message::try_from(record(0xF1).as_slice()).unwrap_err(),
+            Error::UnsupportedChunkedRecord
+        );
+
+        let mut raw = [0u8; 16];
+        // bytes after the record that ended the message
+        raw[..8].copy_from_slice(&record(0xD1));
+        raw[8..].copy_from_slice(&record(0xD1));
+        assert_eq!(
+            Message::try_from(raw.as_slice()).unwrap_err(),
+            Error::InvalidFraming
+        );
+        // a second record beginning the message again
+        raw[..8].copy_from_slice(&record(0x91));
+        raw[8..].copy_from_slice(&record(0xD1));
+        assert_eq!(
+            Message::try_from(raw.as_slice()).unwrap_err(),
+            Error::InvalidFraming
+        );
+        // two records framing one message
+        raw[..8].copy_from_slice(&record(0x91));
+        raw[8..].copy_from_slice(&record(0x51));
+        let msg = Message::try_from(raw.as_slice()).unwrap();
+        assert_eq!(msg.records.len(), 2);
+        assert_eq!(msg.to_vec().unwrap().as_slice(), raw.as_slice());
     }
 
     /// 64 characters, the first length the status byte cannot describe.
