@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 {
     "rust-analyzer.cargo.features": [
+        "alloc",
         "cbor",
-        "alloc"
+        "dcbor"
     ],
     "rust-analyzer.check.features": [
+        "alloc",
         "cbor",
-        "alloc"
+        "dcbor"
     ]
 }

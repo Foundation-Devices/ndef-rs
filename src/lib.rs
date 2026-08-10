@@ -194,7 +194,7 @@ impl<'a> Payload<'a> {
             Payload::RTD(rtd) => rtd.to_vec(),
         }
     }
-    #[cfg(all(feature = "alloc", feature = "cbor"))]
+    #[cfg(feature = "dcbor")]
     pub fn from_cbor_encodable<T>(x: &T) -> Self
     where
         T: dcbor::CBOREncodable,

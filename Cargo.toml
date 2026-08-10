@@ -14,15 +14,22 @@ version = "0.5.0"
 
 [dependencies]
 derive_more = { version = "1.0", default-features = false, features = ["from"] }
-dcbor = { version = "0.23", optional = true, default-features = false, features = ["no_std"] }
 rustversion = "1.0"
 
-[target.'cfg(not(features = "alloc"))'.dependencies]
+# Backs the fixed-capacity containers used when `alloc` is disabled. Cargo
+# cannot express a dependency on the absence of a feature, so it is always
+# resolved and only compiled into the crate when `alloc` is off.
 heapless = { version = "0.8", default-features = false }
+
+# Only used by `Payload::from_cbor_encodable`. Its manifest requires a newer
+# toolchain than this crate's MSRV and it pulls `std` through its own
+# dependencies, so it is kept out of the `cbor` feature.
+dcbor = { version = "0.23", optional = true, default-features = false, features = ["no_std"] }
 
 [features]
 alloc = []
-cbor = ["dep:dcbor"]
+cbor = []
+dcbor = ["cbor", "alloc", "dep:dcbor"]
 
 [[example]]
 name = "serialize_text"
