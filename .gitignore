@@ -6,3 +6,4 @@ Cargo.lock
 .pre-commit-config.yaml
 .devenv.flake.nix
 .devenv
+/.envrc
