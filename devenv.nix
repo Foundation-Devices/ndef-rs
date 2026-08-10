@@ -5,6 +5,10 @@
   ...
 }:
 {
+  packages = [
+    pkgs.cargo-sort
+  ];
+
   # https://devenv.sh/languages/
   languages.rust.enable = true;
 

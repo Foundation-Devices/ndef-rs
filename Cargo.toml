@@ -12,24 +12,24 @@ repository = "https://github.com/Foundation-Devices/ndef-rs"
 rust-version = "1.75.0"
 version = "0.5.0"
 
-[dependencies]
-derive_more = { version = "1.0", default-features = false, features = ["from"] }
-rustversion = "1.0"
+[features]
+alloc = []
+cbor = []
+dcbor = ["cbor", "alloc", "dep:dcbor"]
 
-# Backs the fixed-capacity containers used when `alloc` is disabled. Cargo
-# cannot express a dependency on the absence of a feature, so it is always
-# resolved and only compiled into the crate when `alloc` is off.
-heapless = { version = "0.8", default-features = false }
+[dependencies]
 
 # Only used by `Payload::from_cbor_encodable`. Its manifest requires a newer
 # toolchain than this crate's MSRV and it pulls `std` through its own
 # dependencies, so it is kept out of the `cbor` feature.
 dcbor = { version = "0.23", optional = true, default-features = false, features = ["no_std"] }
+derive_more = { version = "1.0", default-features = false, features = ["from"] }
 
-[features]
-alloc = []
-cbor = []
-dcbor = ["cbor", "alloc", "dep:dcbor"]
+# Backs the fixed-capacity containers used when `alloc` is disabled. Cargo
+# cannot express a dependency on the absence of a feature, so it is always
+# resolved and only compiled into the crate when `alloc` is off.
+heapless = { version = "0.8", default-features = false }
+rustversion = "1.0"
 
 [[example]]
 name = "serialize_text"
