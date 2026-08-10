@@ -43,7 +43,7 @@ version and rules out bare-metal targets.
 ### Cargo.toml
 
     [dependencies]
-    ndef = { version = "0.5.0", features = ["alloc"] }
+    ndef = { version = "0.6.0", features = ["alloc"] }
     
 
 ### main.rs  
