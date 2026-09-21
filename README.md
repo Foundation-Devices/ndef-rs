@@ -28,11 +28,11 @@ a global allocator.
 
 | feature set          | `no_std` target | MSRV      |
 | -------------------- | --------------- | --------- |
-| *(none)*             | yes             | 1.75      |
-| `alloc`              | yes, with a global allocator | 1.75 |
-| `cbor`               | yes             | 1.75      |
-| `alloc,cbor`         | yes, with a global allocator | 1.75 |
-| `dcbor`              | no, needs `std` | 1.85      |
+| *(none)*             | yes             | 1.87      |
+| `alloc`              | yes, with a global allocator | 1.87 |
+| `cbor`               | yes             | 1.87      |
+| `alloc,cbor`         | yes, with a global allocator | 1.87 |
+| `dcbor`              | no, needs `std` | 1.88      |
 
 `dcbor` is kept behind its own feature because the `dcbor` crate is published
 with edition 2024 and enables the default features of `chrono` and `hex`, both
