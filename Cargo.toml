@@ -9,8 +9,8 @@ keywords = ["no-std", "nfc"]
 license = "GPL-3.0-or-later"
 name = "ndef"
 repository = "https://github.com/Foundation-Devices/ndef-rs"
-rust-version = "1.75.0"
-version = "0.6.0"
+rust-version = "1.87.0"
+version = "0.7.0"
 
 [features]
 alloc = []
@@ -28,7 +28,7 @@ derive_more = { version = "1.0", default-features = false, features = ["from"] }
 # Backs the fixed-capacity containers used when `alloc` is disabled. Cargo
 # cannot express a dependency on the absence of a feature, so it is always
 # resolved and only compiled into the crate when `alloc` is off.
-heapless = { version = "0.8", default-features = false }
+heapless = { version = "0.9.2", default-features = false }
 rustversion = "1.0"
 
 [[example]]

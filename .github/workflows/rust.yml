@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [ "1.75.0", "stable" ]
+        toolchain: [ "1.87.0", "stable" ]
         features:
           - "--no-default-features"
           - "--features alloc"
