@@ -10,7 +10,7 @@ license = "GPL-3.0-or-later"
 name = "ndef"
 repository = "https://github.com/Foundation-Devices/ndef-rs"
 rust-version = "1.87.0"
-version = "0.6.0"
+version = "0.7.0"
 
 [features]
 alloc = []
